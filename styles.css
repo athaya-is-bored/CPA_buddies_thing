@@ -59,6 +59,18 @@ body{
 .page-title{font-family:var(--font-heading);font-weight:700;color:var(--dark-gray)}
 .muted{color:#666}
 
+/* Cards and dashboard */
+.card{background:var(--white);border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,0.06);margin-bottom:12px}
+.dashboard-header{display:flex;align-items:center;justify-content:space-between}
+.user-row{display:flex;align-items:center;gap:12px;padding:10px;border-bottom:1px solid #f1f1f1}
+.user-row:last-child{border-bottom:none}
+.user-row img{width:40px;height:40px;border-radius:50%;object-fit:cover}
+.tag{background:#f5f5f5;padding:6px 8px;border-radius:8px;font-weight:700;color:var(--dark-gray)}
+.small-btn{padding:6px 8px;border-radius:8px;border:0;cursor:pointer;font-weight:700}
+.small-btn.warn{background:var(--light-gray)}
+.small-btn.primary{background:var(--dark-blue);color:var(--white)}
+.small-btn.ghost{background:transparent;border:1px solid #ddd}
+
 /* Auth gate */
 .auth-gate{position:fixed;inset:0;background:var(--white);display:flex;align-items:center;justify-content:center;z-index:50}
 .auth-card{width:360px;border-radius:10px;padding:28px;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,0.06)}
@@ -73,10 +85,10 @@ body{
 /* Modal */
 .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:60}
 .modal.hidden{display:none}
-.modal-card{width:420px;background:var(--white);border-radius:10px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,0.12)}
-.modal-card h2{font-family:var(--font-heading);margin-top:0}
+.modal-card{width:520px;background:var(--white);border-radius:10px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,0.12)}
+.modal-card h3{font-family:var(--font-heading);margin-top:0}
 .modal-card label{display:block;margin:10px 0;font-size:14px}
-.modal-card input{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-top:6px}
+.modal-card input, .modal-card select, .modal-card textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-top:6px}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
 .small{font-size:13px;color:#666}
 .error{color:var(--error);margin-top:10px}

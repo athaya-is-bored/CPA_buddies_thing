@@ -38,6 +38,8 @@
   <nav id="sidebar" class="sidebar hidden" aria-hidden="true">
     <ul class="nav-list">
       <li><a href="#" data-page="home">Home</a></li>
+      <li class="admin-link hidden"><a href="#" data-page="admin">Admin Dashboard</a></li>
+      <li class="teacher-link hidden"><a href="#" data-page="teacher">Teacher Dashboard</a></li>
       <li><a href="#" data-page="messages">Messages</a></li>
       <li><a href="#" data-page="study">Study Buddies</a></li>
       <li><a href="#" data-page="notifications">Notifications</a></li>
@@ -111,6 +113,9 @@
       <p id="signupError" class="error hidden"></p>
     </div>
   </div>
+
+  <!-- Generic modal container for dashboard actions -->
+  <div id="genericModal" class="modal hidden"><div class="modal-card" id="genericModalCard"></div></div>
 
   <script src="/script.js"></script>
 </body>
