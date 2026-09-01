@@ -99,11 +99,45 @@ textarea{min-height:80px}
 .error{color:var(--error);margin-top:10px}
 .hidden{display:none}
 
-/* Utility */
-.center{display:flex;align-items:center;justify-content:center}
+/* Users page */
+.users-search{margin-bottom:12px}
+.users-list{background:var(--white);border-radius:10px;overflow:hidden}
+.users-item{display:flex;align-items:center;gap:12px;padding:12px;border-bottom:1px solid #f1f1f1}
+.users-item:last-child{border-bottom:none}
+.users-item img{width:48px;height:48px;border-radius:50%;object-fit:cover}
+.users-item a{color:var(--dark-gray);text-decoration:none;font-weight:700}
+.users-item a:hover{filter:brightness(1.1)}
+.users-item .role-tag{margin-left:auto;padding:6px 8px;border-radius:8px;background:#f5f5f5;font-weight:700}
+
+/* Messages page */
+.messages-container{display:flex;gap:14px}
+.dm-list{width:28%;min-width:220px;background:var(--light-blue);border-radius:10px;padding:12px;display:flex;flex-direction:column;height:70vh}
+.dm-section{flex:1;overflow:auto;margin-bottom:8px}
+.dm-item{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;cursor:pointer}
+.dm-item:hover{filter:brightness(1.05)}
+.dm-item img{width:44px;height:44px;border-radius:50%;object-fit:cover}
+.create-chat-btn{margin-top:auto;padding:10px;border-radius:8px;border:0;background:var(--dark-blue);color:var(--white);font-weight:700;cursor:pointer}
+.chat-view{flex:1;display:flex;flex-direction:column;height:70vh;background:var(--white);border-radius:10px;padding:12px}
+.chat-messages{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
+.message-row{display:flex;flex-direction:column;max-width:70%}
+.message-from{font-weight:700;font-size:13px;margin-bottom:6px}
+.bubble{background:var(--light-blue);padding:10px;border-radius:12px;color:var(--dark-gray)}
+.message-meta{font-size:11px;color:#666;margin-top:4px}
+.input-row{display:flex;gap:8px;margin-top:8px}
+.input-row textarea{flex:1;min-height:44px;padding:8px;border-radius:8px;border:1px solid #ddd}
+.input-row button{padding:10px 14px;border-radius:8px;border:0;background:var(--dark-blue);color:var(--white);cursor:pointer}
+
+/* alignment: user's messages align left, others align right */
+.message-row.self{align-items:flex-start}
+.message-row.other{align-items:flex-end}
+.message-row.self .bubble{border-bottom-left-radius:4px}
+.message-row.other .bubble{border-bottom-right-radius:4px}
 
 @media (max-width:720px){
   .sidebar{width:70vw}
   .auth-card{width:90vw}
   .modal-card{width:90vw}
+  .messages-container{flex-direction:column}
+  .dm-list{width:100%;height:auto}
+  .chat-view{width:100%;height:60vh}
 }
