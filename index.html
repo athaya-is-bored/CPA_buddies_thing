@@ -68,6 +68,41 @@
       <h2 id="placeholderTitle">Page</h2>
       <p class="muted">Content for this page is not implemented yet.</p>
     </section>
+
+    <!-- Account Setup page (shown after sign up) -->
+    <section id="accountSetupPage" class="page hidden">
+      <h1 class="page-title">Account Setup</h1>
+      <p class="muted">Please answer at least 4 of the security questions below. These help you recover your account.</p>
+      <form id="accountSetupForm">
+        <div class="card">
+          <label>What was your first pet's name?<input name="q1" type="text"></label>
+          <label>What was your mother's maiden name?<input name="q2" type="text"></label>
+          <label>What city were you born in?<input name="q3" type="text"></label>
+          <label>What year did you join CPA?<input name="q4" type="text"></label>
+          <label>What is your middle name?<input name="q5" type="text"></label>
+          <label>What is your oldest sibling's name?<input name="q6" type="text"></label>
+          <label>What is your youngest sibling's name?<input name="q7" type="text"></label>
+          <label>What time were you born?<input name="q8" type="text"></label>
+          <label>When is your birthday?<input name="q9" type="text"></label>
+          <label>What is your mother’s father’s name?<input name="q10" type="text"></label>
+
+          <label>Status<select id="setupStatus" name="status">
+            <option>Student</option>
+            <option>Teacher</option>
+            <option>Admin</option>
+          </select></label>
+
+          <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+            <button id="submitSetup" type="button" class="btn primary">Submit</button>
+            <button id="cancelSetup" type="button" class="btn ghost">Cancel</button>
+          </div>
+          <p id="setupError" class="error hidden"></p>
+          <p style="margin-top:10px"><a href="#" id="whyRequiredToggle">Why is this required?</a></p>
+          <div id="whyRequired" class="card hidden"><p>This guarantees you can always get into your account, even if you forget your password.</p></div>
+        </div>
+      </form>
+    </section>
+
   </main>
 
   <!-- Sign in/up gate (shown when not logged in) -->
@@ -111,6 +146,47 @@
         <button id="signupCancel" class="btn ghost">Cancel</button>
       </div>
       <p id="signupError" class="error hidden"></p>
+    </div>
+  </div>
+
+  <!-- Forgot Password modal -->
+  <div id="forgotModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Forgot Password</h3>
+      <label>Email<input id="forgotEmail" type="email"></label>
+      <div class="modal-actions">
+        <button id="forgotSubmit" class="btn primary">Submit</button>
+        <button id="forgotCancel" class="btn ghost">Cancel</button>
+      </div>
+      <p id="forgotError" class="error hidden"></p>
+    </div>
+  </div>
+
+  <!-- Recovery modal (security question) -->
+  <div id="recoveryModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Account Recovery</h3>
+      <p id="recoveryQuestion"></p>
+      <label>Answer<input id="recoveryAnswer" type="text"></label>
+      <div class="modal-actions">
+        <button id="recoverySubmit" class="btn primary">Submit</button>
+        <button id="recoveryCancel" class="btn ghost">Cancel</button>
+      </div>
+      <p id="recoveryError" class="error hidden"></p>
+    </div>
+  </div>
+
+  <!-- Reset Password modal -->
+  <div id="resetModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Reset Password</h3>
+      <label>New Password<input id="resetNew" type="password"></label>
+      <label>Repeat Password<input id="resetRepeat" type="password"></label>
+      <div class="modal-actions">
+        <button id="resetSubmit" class="btn primary">Submit</button>
+        <button id="resetCancel" class="btn ghost">Cancel</button>
+      </div>
+      <p id="resetError" class="error hidden"></p>
     </div>
   </div>
 

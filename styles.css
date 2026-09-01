@@ -82,6 +82,11 @@ body{
 .btn.secondary{background:var(--light-blue);color:var(--dark-gray)}
 .btn.ghost{background:transparent;border:1px solid #ccc}
 
+/* Forms and inputs */
+label{display:block;margin:10px 0;font-size:14px}
+input[type="text"], input[type="email"], input[type="password"], select, textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-top:6px}
+textarea{min-height:80px}
+
 /* Modal */
 .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:60}
 .modal.hidden{display:none}

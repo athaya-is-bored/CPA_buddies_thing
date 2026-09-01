@@ -1,4 +1,4 @@
-// script.js - handles sidebar, auth gate, and basic navigation + admin/teacher dashboards
+// script.js - handles sidebar, auth gate, and navigation + account setup & recovery
 (function(){
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
@@ -6,6 +6,9 @@
   const authGate = document.getElementById('authGate');
   const signInModal = document.getElementById('signInModal');
   const signUpModal = document.getElementById('signUpModal');
+  const forgotModal = document.getElementById('forgotModal');
+  const recoveryModal = document.getElementById('recoveryModal');
+  const resetModal = document.getElementById('resetModal');
   const genericModal = document.getElementById('genericModal');
   const genericModalCard = document.getElementById('genericModalCard');
 
@@ -89,12 +92,9 @@
   function navigateTo(page){
     document.getElementById('homePage').classList.add('hidden');
     document.getElementById('placeholderPage').classList.add('hidden');
+    document.getElementById('accountSetupPage').classList.add('hidden');
     if(page === 'home'){
       document.getElementById('homePage').classList.remove('hidden');
-    } else if(page === 'admin'){
-      renderAdminDashboard();
-    } else if(page === 'teacher'){
-      renderTeacherDashboard();
     } else {
       document.getElementById('placeholderPage').classList.remove('hidden');
       document.getElementById('placeholderTitle').textContent = page[0].toUpperCase()+page.slice(1);
@@ -107,6 +107,119 @@
   document.getElementById('signinCancel').addEventListener('click', ()=>{ signInModal.classList.add('hidden'); });
   document.getElementById('signupCancel').addEventListener('click', ()=>{ signUpModal.classList.add('hidden'); });
 
+  // Forgot password flow
+  document.getElementById('forgotLink').addEventListener('click', (e)=>{
+    e.preventDefault();
+    signInModal.classList.add('hidden');
+    forgotModal.classList.remove('hidden');
+  });
+  document.getElementById('forgotCancel').addEventListener('click', ()=>{ forgotModal.classList.add('hidden'); });
+
+  document.getElementById('forgotSubmit').addEventListener('click', ()=>{
+    const email = document.getElementById('forgotEmail').value.trim();
+    const err = document.getElementById('forgotError'); err.classList.add('hidden');
+    if(!email){ err.textContent = 'Please enter an email.'; err.classList.remove('hidden'); return; }
+    const accounts = getAccounts();
+    const acc = accounts.find(a=>a.email === email);
+    if(!acc){ err.textContent = 'Email not found. Please check spelling and try again.'; err.classList.remove('hidden'); return; }
+    // store recovery email and prepare questions
+    localStorage.setItem('passwordRecoveryEmail', email);
+    forgotModal.classList.add('hidden');
+    startRecoveryForAccount(acc);
+  });
+
+  function startRecoveryForAccount(acc){
+    const security = acc.security || {};
+    const keys = Object.keys(security).filter(k=>security[k] && security[k].trim().length>0);
+    if(keys.length === 0){
+      alert('No security questions set for this account. Please contact support.');
+      return;
+    }
+    // pick random question
+    const picked = keys[Math.floor(Math.random()*keys.length)];
+    localStorage.setItem('recoveryQuestionKey', picked);
+    renderRecoveryQuestion(picked, security[picked]);
+  }
+
+  function renderRecoveryQuestion(key, expected){
+    document.getElementById('recoveryQuestion').textContent = questionKeyToText(key);
+    document.getElementById('recoveryAnswer').value = '';
+    document.getElementById('recoveryError').classList.add('hidden');
+    recoveryModal.classList.remove('hidden');
+  }
+
+  document.getElementById('recoveryCancel').addEventListener('click', ()=>{ recoveryModal.classList.add('hidden'); });
+  document.getElementById('recoverySubmit').addEventListener('click', ()=>{
+    const answer = document.getElementById('recoveryAnswer').value.trim();
+    const email = localStorage.getItem('passwordRecoveryEmail');
+    const accounts = getAccounts();
+    const acc = accounts.find(a=>a.email === email);
+    const err = document.getElementById('recoveryError'); err.classList.add('hidden');
+    if(!acc){ err.textContent = 'Account not found.'; err.classList.remove('hidden'); return; }
+    const key = localStorage.getItem('recoveryQuestionKey');
+    const correct = (acc.security && acc.security[key]) || '';
+    if(answer.toLowerCase() !== (correct || '').toLowerCase()){
+      err.textContent = 'Incorrect. Please try again.'; err.classList.remove('hidden');
+      // pick another question (if available)
+      const keys = Object.keys(acc.security || {}).filter(k=>acc.security[k] && k !== key);
+      if(keys.length === 0){
+        // no more questions, keep same
+        return;
+      }
+      const newKey = keys[Math.floor(Math.random()*keys.length)];
+      localStorage.setItem('recoveryQuestionKey', newKey);
+      // update displayed question after short delay
+      setTimeout(()=>{ document.getElementById('recoveryQuestion').textContent = questionKeyToText(newKey); document.getElementById('recoveryAnswer').value = ''; }, 600);
+      return;
+    }
+    // correct answer -> open reset password
+    recoveryModal.classList.add('hidden');
+    resetModal.classList.remove('hidden');
+  });
+
+  document.getElementById('resetCancel').addEventListener('click', ()=>{ resetModal.classList.add('hidden'); });
+  document.getElementById('resetSubmit').addEventListener('click', ()=>{
+    const p1 = document.getElementById('resetNew').value.trim();
+    const p2 = document.getElementById('resetRepeat').value.trim();
+    const err = document.getElementById('resetError'); err.classList.add('hidden');
+    if(!p1 || !p2){ err.textContent = 'Please fill both password fields.'; err.classList.remove('hidden'); return; }
+    if(p1 !== p2){ err.textContent = 'Your password does not match your repeated password. Please check spelling and try again.'; err.classList.remove('hidden'); return; }
+    const email = localStorage.getItem('passwordRecoveryEmail');
+    const accounts = getAccounts();
+    const idx = accounts.findIndex(a=>a.email === email);
+    if(idx === -1){ err.textContent = 'Account not found.'; err.classList.remove('hidden'); return; }
+    accounts[idx].password = p1;
+    setAccounts(accounts);
+    resetModal.classList.add('hidden');
+    // sign in the user and redirect depending on approval
+    localStorage.setItem('loggedIn','true');
+    localStorage.setItem('accountEmail', email);
+    localStorage.setItem('accountName', accounts[idx].name || '');
+    if(!accounts[idx].approved){
+      showAwaitingApproval();
+    } else {
+      refreshAuth();
+      navigateTo('home');
+    }
+  });
+
+  function questionKeyToText(k){
+    const map = {
+      q1: "What was your first pet's name?",
+      q2: "What was your mother's maiden name?",
+      q3: "What city were you born in?",
+      q4: "What year did you join CPA?",
+      q5: "What is your middle name?",
+      q6: "What is your oldest sibling's name?",
+      q7: "What is your youngest sibling's name?",
+      q8: "What time were you born?",
+      q9: "When is your birthday?",
+      q10: "What is your mother’s father’s name?"
+    };
+    return map[k] || k;
+  }
+
+  // Sign in submission
   document.getElementById('signinSubmit').addEventListener('click', ()=>{
     const name = document.getElementById('signin-name').value.trim();
     const email = document.getElementById('signin-email').value.trim();
@@ -116,26 +229,21 @@
     const accounts = getAccounts();
     const match = accounts.find(a=>a.email === email && a.password === password);
     if(match){
-      if(!match.approved){
-        // still allow to create a session but show awaiting approval
-        localStorage.setItem('loggedIn','true');
-        localStorage.setItem('accountEmail', match.email);
-        localStorage.setItem('accountName', match.name);
-        signInModal.classList.add('hidden');
-        showAwaitingApproval();
-        return;
-      }
       localStorage.setItem('loggedIn','true');
       localStorage.setItem('accountEmail', match.email);
       localStorage.setItem('accountName', match.name);
       signInModal.classList.add('hidden');
+      if(!match.approved){
+        showAwaitingApproval();
+        return;
+      }
       refreshAuth();
     } else {
       err.classList.remove('hidden');
     }
   });
 
-  // sign up with notification to admins
+  // sign up: create account then go to account setup
   document.getElementById('signupSubmit').addEventListener('click', ()=>{
     const name = document.getElementById('signup-name').value.trim();
     const email = document.getElementById('signup-email').value.trim();
@@ -150,26 +258,60 @@
     const newAcc = {name, email, password, approved:false, status:'Student', bio:'', classes:[], suspended:false, suspendedUntil:null, security:{}};
     accounts.push(newAcc);
     setAccounts(accounts);
-
-    // send notifications to all admins
-    const admins = accounts.filter(a=>a.status === 'Admin');
-    const notifications = getNotifications();
-    const note = {
-      id: 'note-'+Date.now(),
-      title: 'New Signup Awaiting Approval',
-      body: `New signup: ${name} (${email}). Please review and approve.`,
-      read:false,
-      created_at: new Date().toISOString()
-    };
-    admins.forEach(adm => {
-      const copy = Object.assign({}, note, {to:adm.email});
-      notifications.push(copy);
-    });
-    setNotifications(notifications);
-
-    // mark as awaiting approval UI
+    localStorage.setItem('pendingSetupEmail', email);
+    // hide modal and open account setup
     signUpModal.classList.add('hidden');
     authGate.classList.add('hidden');
+    openAccountSetupFor(email);
+  });
+
+  // Account setup behaviors
+  function openAccountSetupFor(email){
+    document.getElementById('homePage').classList.add('hidden');
+    document.getElementById('placeholderPage').classList.add('hidden');
+    document.getElementById('accountSetupPage').classList.remove('hidden');
+    document.getElementById('setupError').classList.add('hidden');
+  }
+
+  document.getElementById('cancelSetup').addEventListener('click', ()=>{
+    // canceling setup logs the user out of any pending state and returns to sign in/up
+    localStorage.removeItem('pendingSetupEmail');
+    document.getElementById('accountSetupPage').classList.add('hidden');
+    authGate.classList.remove('hidden');
+  });
+
+  document.getElementById('whyRequiredToggle').addEventListener('click', (e)=>{ e.preventDefault(); document.getElementById('whyRequired').classList.toggle('hidden'); });
+
+  document.getElementById('submitSetup').addEventListener('click', ()=>{
+    const email = localStorage.getItem('pendingSetupEmail');
+    if(!email) return alert('No pending signup found.');
+    const accounts = getAccounts();
+    const idx = accounts.findIndex(a=>a.email === email);
+    if(idx === -1) return alert('Account not found.');
+    const form = document.getElementById('accountSetupForm');
+    const data = new FormData(form);
+    // gather answers
+    const answers = {};
+    for(let i=1;i<=10;i++){
+      const key = 'q'+i; const val = (data.get(key) || '').toString().trim();
+      if(val) answers[key] = val;
+    }
+    const filled = Object.keys(answers).length;
+    const err = document.getElementById('setupError'); err.classList.add('hidden');
+    if(filled < 4){ err.textContent = 'At least 4 Security Questions are required. Please add more, then try again.'; err.classList.remove('hidden'); return; }
+    const chosenStatus = document.getElementById('setupStatus').value;
+    accounts[idx].security = answers;
+    accounts[idx].status = chosenStatus || 'Student';
+    setAccounts(accounts);
+    // send notification to admins about new signup
+    const admins = accounts.filter(a=>a.status === 'Admin');
+    const notifications = getNotifications();
+    const note = { id: 'note-'+Date.now(), title: 'New Signup Awaiting Approval', body: `New signup: ${accounts[idx].name} (${accounts[idx].email}). Please review and approve.`, read:false, created_at: new Date().toISOString() };
+    admins.forEach(adm => { const copy = Object.assign({}, note, {to:adm.email}); notifications.push(copy); });
+    setNotifications(notifications);
+
+    // cleanup pending and show awaiting approval
+    localStorage.removeItem('pendingSetupEmail');
     showAwaitingApproval();
   });
 
@@ -190,175 +332,6 @@
     }
   });
 
-  // Admin Dashboard rendering and actions
-  function renderAdminDashboard(){
-    const acc = getCurrentAccount();
-    if(!acc || acc.status !== 'Admin'){
-      alert('Access denied: Admins only');
-      return;
-    }
-    const accounts = getAccounts();
-    const pending = accounts.filter(a=>!a.approved);
-    const students = accounts.filter(a=>a.approved && a.status === 'Student');
-
-    let html = `<section class="page"><div class="dashboard-header"><h1 class="page-title">Admin Dashboard</h1></div>`;
-
-    // Pending approvals
-    html += `<div class="card"><h3>Pending Approvals</h3>`;
-    if(pending.length === 0) html += `<p class="muted">No pending signups.</p>`;
-    pending.forEach(p => {
-      html += `<div class="user-row"><img src="/assets/default-pfp.svg" alt="pfp"><div style="flex:1"><strong>${p.name}</strong><div class="small">${p.email}</div></div><div style="display:flex;gap:8px;align-items:center"><select data-email="${p.email}" class="status-select"><option>Student</option><option>Teacher</option><option>Admin</option></select><button class="small-btn primary approve-btn" data-email="${p.email}">Approve</button></div></div>`;
-    });
-    html += `</div>`;
-
-    // Student controls
-    html += `<div class="card"><h3>Students</h3>`;
-    if(students.length === 0) html += `<p class="muted">No students found.</p>`;
-    students.forEach(s => {
-      html += `<div class="user-row"><img src="/assets/default-pfp.svg"><div style="flex:1"><a href="#" class="user-link" data-email="${s.email}">${s.name}</a><div class="small">${s.email}</div></div><div style="display:flex;gap:8px"><button class="small-btn ghost edit-btn" data-email="${s.email}">Edit</button><button class="small-btn warn suspend-btn" data-email="${s.email}">${s.suspended? 'Unsuspend':'Suspend'}</button><div class="tag">${s.status}</div></div></div>`;
-    });
-    html += `</div>`;
-
-    // self actions
-    html += `<div class="card"><h3>Your Account</h3><p>You are signed in as <strong>${acc.name}</strong> (${acc.email}).</p><div style="display:flex;gap:10px"><button id="demoteSelf" class="small-btn warn">Demote to Teacher</button></div></div>`;
-
-    html += `</section>`;
-    document.getElementById('appContent').innerHTML = html;
-
-    // wire up approve buttons
-    document.querySelectorAll('.approve-btn').forEach(btn => btn.addEventListener('click', (e)=>{
-      const email = btn.getAttribute('data-email');
-      const select = document.querySelector(`.status-select[data-email=\"${email}\"]`);
-      const chosen = select.value;
-      approveAccount(email, chosen);
-    }));
-
-    // edit buttons
-    document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', ()=>{
-      const email = btn.getAttribute('data-email');
-      openEditProfileModal(email);
-    }));
-
-    // suspend buttons
-    document.querySelectorAll('.suspend-btn').forEach(btn => btn.addEventListener('click', ()=>{
-      const email = btn.getAttribute('data-email');
-      toggleSuspend(email);
-    }));
-
-    document.getElementById('demoteSelf').addEventListener('click', ()=>{
-      if(!confirm('Are you sure you want to demote yourself to Teacher?')) return;
-      changeStatus(acc.email, 'Teacher');
-      alert('You have been demoted to Teacher. Refreshing...');
-      location.reload();
-    });
-  }
-
-  function approveAccount(email, status){
-    const accounts = getAccounts();
-    const idx = accounts.findIndex(a=>a.email===email);
-    if(idx === -1) return alert('Account not found');
-    accounts[idx].approved = true;
-    accounts[idx].status = status;
-    setAccounts(accounts);
-    // mark related notifications as resolved (delete)
-    let notes = getNotifications().filter(n=>n.body && !n.body.includes(email));
-    setNotifications(notes);
-    alert(`${accounts[idx].name} approved as ${status}`);
-    renderAdminDashboard();
-  }
-
-  function changeStatus(email, newStatus){
-    const accounts = getAccounts();
-    const idx = accounts.findIndex(a=>a.email===email);
-    if(idx === -1) return;
-    accounts[idx].status = newStatus;
-    setAccounts(accounts);
-  }
-
-  function toggleSuspend(email){
-    const accounts = getAccounts();
-    const idx = accounts.findIndex(a=>a.email===email);
-    if(idx === -1) return;
-    const acc = accounts[idx];
-    if(acc.suspended){
-      acc.suspended = false; acc.suspendedUntil = null;
-      setAccounts(accounts);
-      alert(`${acc.name} has been unsuspended.`);
-      renderAdminDashboard();
-      return;
-    }
-    // open modal to choose suspend length
-    openModal(`<h3>Suspend ${acc.name}</h3><label>Until (ISO date or leave blank for indefinite)<input id=\"suspendUntil\" placeholder=\"YYYY-MM-DD or leave blank\"></label><div class=\"modal-actions\"><button id=\"confirmSuspend\" class=\"small-btn warn\">Suspend</button><button id=\"cancelModal\" class=\"small-btn ghost\">Cancel</button></div>`);
-    document.getElementById('confirmSuspend').addEventListener('click', ()=>{
-      const until = document.getElementById('suspendUntil').value.trim();
-      acc.suspended = true; acc.suspendedUntil = until || null;
-      setAccounts(accounts);
-      closeModal();
-      alert(`${acc.name} suspended${until? ` until ${until}`: ' indefinitely'}.`);
-      renderAdminDashboard();
-    });
-    document.getElementById('cancelModal').addEventListener('click', closeModal);
-  }
-
-  function openEditProfileModal(email){
-    const accounts = getAccounts();
-    const acc = accounts.find(a=>a.email===email);
-    if(!acc) return alert('User not found');
-    const classesText = (acc.classes || []).join(', ');
-    openModal(`<h3>Edit Profile: ${acc.name}</h3><label>Full Name<input id=\"editName\" value=\"${acc.name}\"></label><label>Bio<textarea id=\"editBio\">${acc.bio || ''}</textarea></label><label>Classes (comma separated)<input id=\"editClasses\" value=\"${classesText}\"></label><div class=\"modal-actions\"><button id=\"saveEdit\" class=\"small-btn primary\">Save</button><button id=\"cancelEdit\" class=\"small-btn ghost\">Cancel</button></div>`);
-    document.getElementById('saveEdit').addEventListener('click', ()=>{
-      acc.name = document.getElementById('editName').value.trim();
-      acc.bio = document.getElementById('editBio').value.trim();
-      const cls = document.getElementById('editClasses').value.trim();
-      acc.classes = cls ? cls.split(',').map(s=>s.trim()).filter(Boolean) : [];
-      setAccounts(accounts);
-      closeModal();
-      renderAdminDashboard();
-    });
-    document.getElementById('cancelEdit').addEventListener('click', closeModal);
-  }
-
-  // Teacher Dashboard
-  function renderTeacherDashboard(){
-    const acc = getCurrentAccount();
-    if(!acc || (acc.status !== 'Teacher' && acc.status !== 'Admin')){
-      alert('Access denied: Teachers only');
-      return;
-    }
-    const accounts = getAccounts();
-    const students = accounts.filter(a=>a.approved && a.status === 'Student');
-    let html = `<section class="page"><div class="dashboard-header"><h1 class="page-title">Teacher Dashboard</h1></div>`;
-    html += `<div class="card"><h3>Students</h3>`;
-    if(students.length === 0) html += `<p class="muted">No students found.</p>`;
-    students.forEach(s=>{
-      html += `<div class="user-row"><img src="/assets/default-pfp.svg"><div style="flex:1"><strong>${s.name}</strong><div class="small">${s.email}</div></div><div style="display:flex;gap:8px"><button class="small-btn ghost edit-btn" data-email="${s.email}">Edit</button><button class="small-btn warn suspend-btn" data-email="${s.email}">${s.suspended? 'Unsuspend':'Suspend'}</button><div class="tag">${s.status}</div></div></div>`;
-    });
-    html += `</div>`;
-
-    // self actions
-    html += `<div class="card"><h3>Your Account</h3><p>Signed in as <strong>${acc.name}</strong> (${acc.email})</p><div style="display:flex;gap:10px"><button id="promoteSelf" class="small-btn primary">Promote to Admin</button></div></div>`;
-
-    html += `</section>`;
-    document.getElementById('appContent').innerHTML = html;
-
-    document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', ()=> openEditProfileModal(btn.getAttribute('data-email'))));
-    document.querySelectorAll('.suspend-btn').forEach(btn => btn.addEventListener('click', ()=> toggleSuspend(btn.getAttribute('data-email'))));
-
-    document.getElementById('promoteSelf').addEventListener('click', ()=>{
-      if(!confirm('Promote yourself to Admin? This grants elevated permissions.')) return;
-      changeStatus(acc.email, 'Admin');
-      alert('You are now an Admin. Refreshing...');
-      location.reload();
-    });
-  }
-
-  // Modal helpers
-  function openModal(html){
-    genericModalCard.innerHTML = html;
-    genericModal.classList.remove('hidden');
-  }
-  function closeModal(){ genericModal.classList.add('hidden'); genericModalCard.innerHTML = ''; }
-
   // seed admin account for testing if no accounts exist
   (function seedAdmin(){
     const accounts = getAccounts();
@@ -372,11 +345,18 @@
         bio:'',
         classes:[],
         suspended:false,
-        security:{firstPet:'Ferb', motherMaiden:'Reza', city:'San Diego', middle:'Joy', oldestSibling:'Hannah', birthday:'August 11'}
+        security:{q1:'Ferb', q2:'Reza', q3:'San Diego', q5:'Joy', q6:'Hannah', q9:'August 11'}
       });
       setAccounts(accounts);
     }
   })();
+
+  // Modal helpers
+  function openModal(html){
+    genericModalCard.innerHTML = html;
+    genericModal.classList.remove('hidden');
+  }
+  function closeModal(){ genericModal.classList.add('hidden'); genericModalCard.innerHTML = ''; }
 
   // initial navigation binding for top icons
   document.getElementById('homeIcon').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('home'); });
