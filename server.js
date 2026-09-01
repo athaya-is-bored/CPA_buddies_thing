@@ -1,4 +1,4 @@
-// server.js - Express server with SQLite and JWT authentication
+// server.js - Express server with SQLite, secure cookie-based authentication
 const express = require('express');
 const path = require('path');
 const bodyParser = require('body-parser');
@@ -6,11 +6,17 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const fs = require('fs');
 
 const DB_FILE = path.join(__dirname, 'data.sqlite3');
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret_in_prod';
+const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || 'access_secret_change_in_prod';
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || 'refresh_secret_change_in_prod';
 const PORT = process.env.PORT || 3000;
+
+// Token expiry times
+const ACCESS_TOKEN_EXPIRY = '15m';  // short-lived
+const REFRESH_TOKEN_EXPIRY = '7d';  // long-lived
 
 // ensure DB file exists
 const db = new sqlite3.Database(DB_FILE);
@@ -43,6 +49,15 @@ async function initDb(){
     created_at TEXT DEFAULT (datetime('now'))
   )`);
 
+  await runSql(db, `CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    token_hash TEXT UNIQUE,
+    expires_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
   await runSql(db, `CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
@@ -59,6 +74,7 @@ async function initDb(){
     participants TEXT,
     created_at TEXT DEFAULT (datetime('now'))
   )`);
+  
   await runSql(db, `CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id TEXT,
@@ -85,8 +101,12 @@ async function initDb(){
 initDb().catch(err=>{ console.error('DB init failed', err); process.exit(1); });
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: true, // in prod, specify exact origin
+  credentials: true // allow cookies
+}));
 app.use(bodyParser.json());
+app.use(cookieParser());
 
 // serve static frontend files from repo root
 app.use(express.static(path.join(__dirname)));
@@ -108,8 +128,27 @@ function sanitizeUserRow(row){
   };
 }
 
-function generateToken(payload){
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+function generateAccessToken(payload){
+  return jwt.sign(payload, ACCESS_TOKEN_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
+}
+
+function generateRefreshToken(payload){
+  return jwt.sign(payload, REFRESH_TOKEN_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRY });
+}
+
+async function storeRefreshToken(userId, token){
+  const hash = require('crypto').createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await runSql(db, 'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?,?,?)', 
+    [userId, hash, expiresAt]);
+}
+
+async function verifyRefreshToken(token, userId){
+  const hash = require('crypto').createHash('sha256').update(token).digest('hex');
+  const row = await getSql(db, 
+    'SELECT * FROM refresh_tokens WHERE user_id = ? AND token_hash = ? AND expires_at > datetime("now")',
+    [userId, hash]);
+  return !!row;
 }
 
 async function getUserByEmail(email){
@@ -119,19 +158,22 @@ async function getUserByEmail(email){
   return row;
 }
 
-// JWT middleware
-function authenticateJWT(req,res,next){
-  const auth = req.headers.authorization;
-  if(!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' });
-  const token = auth.slice('Bearer '.length);
-  jwt.verify(token, JWT_SECRET, (err, payload)=>{
-    if(err) return res.status(401).json({ error: 'Invalid token' });
-    req.auth = payload; // contains email, status
+// === Authentication Middleware ===
+// Verify access token from HttpOnly cookie
+function authenticateAccessToken(req, res, next){
+  const accessToken = req.cookies.accessToken;
+  if(!accessToken) return res.status(401).json({ error: 'No access token' });
+  
+  jwt.verify(accessToken, ACCESS_TOKEN_SECRET, (err, payload)=>{
+    if(err) return res.status(401).json({ error: 'Invalid access token' });
+    req.auth = payload; // contains email, status, id
     next();
   });
 }
 
-// Auth endpoints
+// === Auth Endpoints ===
+
+// POST /api/auth/signup - create account (no auto-login)
 app.post('/api/auth/signup', async (req,res)=>{
   try{
     const { name, email, password } = req.body;
@@ -144,6 +186,7 @@ app.post('/api/auth/signup', async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// POST /api/auth/login - authenticate and set HttpOnly cookies
 app.post('/api/auth/login', async (req,res)=>{
   try{
     const { email, password } = req.body;
@@ -152,14 +195,88 @@ app.post('/api/auth/login', async (req,res)=>{
     if(!row) return res.status(401).json({ error: 'Invalid credentials' });
     const ok = await bcrypt.compare(password, row.password_hash);
     if(!ok) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = generateToken({ email: row.email, status: row.status });
+    
+    // Generate tokens
+    const accessToken = generateAccessToken({ email: row.email, status: row.status, id: row.id });
+    const refreshToken = generateRefreshToken({ email: row.email, id: row.id });
+    
+    // Store refresh token in DB
+    await storeRefreshToken(row.id, refreshToken);
+    
+    // Set HttpOnly cookies (not accessible to JS, sent automatically)
+    res.cookie('accessToken', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000 // 15 minutes
+    });
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+    
     const user = sanitizeUserRow(row);
-    return res.json({ token, user });
+    return res.json({ message: 'Logged in', user });
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// Users
-app.get('/api/users', authenticateJWT, async (req,res)=>{
+// POST /api/auth/refresh - refresh access token using refresh token
+app.post('/api/auth/refresh', async (req,res)=>{
+  try{
+    const refreshToken = req.cookies.refreshToken;
+    if(!refreshToken) return res.status(401).json({ error: 'No refresh token' });
+    
+    jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, async (err, payload)=>{
+      if(err) return res.status(401).json({ error: 'Invalid refresh token' });
+      
+      const userId = payload.id;
+      const isValid = await verifyRefreshToken(refreshToken, userId);
+      if(!isValid) return res.status(401).json({ error: 'Refresh token not found or expired' });
+      
+      // Fetch user and issue new access token
+      const user = await getSql(db, 'SELECT * FROM users WHERE id = ?', [userId]);
+      if(!user) return res.status(404).json({ error: 'User not found' });
+      
+      const newAccessToken = generateAccessToken({ email: user.email, status: user.status, id: user.id });
+      res.cookie('accessToken', newAccessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 15 * 60 * 1000
+      });
+      
+      return res.json({ message: 'Token refreshed' });
+    });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/auth/logout - clear cookies and optionally invalidate refresh token
+app.post('/api/auth/logout', authenticateAccessToken, async (req,res)=>{
+  try{
+    const userId = req.auth.id;
+    // Delete all refresh tokens for this user (force re-login on all devices)
+    await runSql(db, 'DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
+    
+    // Clear cookies
+    res.clearCookie('accessToken', { httpOnly: true, sameSite: 'strict' });
+    res.clearCookie('refreshToken', { httpOnly: true, sameSite: 'strict' });
+    return res.json({ message: 'Logged out' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// GET /api/auth/me - get current user from access token
+app.get('/api/auth/me', authenticateAccessToken, async (req,res)=>{
+  try{
+    const user = await getSql(db, 'SELECT * FROM users WHERE email = ?', [req.auth.email]);
+    if(!user) return res.status(404).json({ error: 'User not found' });
+    return res.json({ user: sanitizeUserRow(user) });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// === Users ===
+app.get('/api/users', authenticateAccessToken, async (req,res)=>{
   try{
     const q = (req.query.q || '').trim();
     let rows;
@@ -174,7 +291,7 @@ app.get('/api/users', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-app.get('/api/users/:email', authenticateJWT, async (req,res)=>{
+app.get('/api/users/:email', authenticateAccessToken, async (req,res)=>{
   try{
     const email = req.params.email;
     const row = await getUserByEmail(email);
@@ -189,8 +306,8 @@ app.get('/api/users/:email', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// Chats
-app.post('/api/chats', authenticateJWT, async (req,res)=>{
+// === Chats ===
+app.post('/api/chats', authenticateAccessToken, async (req,res)=>{
   try{
     const { id, type, participants, name } = req.body;
     if(!id || !type || !participants) return res.status(400).json({ error: 'Missing fields' });
@@ -200,7 +317,7 @@ app.post('/api/chats', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-app.get('/api/chats', authenticateJWT, async (req,res)=>{
+app.get('/api/chats', authenticateAccessToken, async (req,res)=>{
   try{
     const email = req.query.email;
     if(!email) return res.status(400).json({ error: 'email required' });
@@ -213,7 +330,7 @@ app.get('/api/chats', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-app.get('/api/chats/:id/messages', authenticateJWT, async (req,res)=>{
+app.get('/api/chats/:id/messages', authenticateAccessToken, async (req,res)=>{
   try{
     const id = req.params.id;
     const msgs = await allSql(db, 'SELECT * FROM messages WHERE chat_id = ? ORDER BY id ASC', [id]);
@@ -221,7 +338,7 @@ app.get('/api/chats/:id/messages', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-app.post('/api/chats/:id/messages', authenticateJWT, async (req,res)=>{
+app.post('/api/chats/:id/messages', authenticateAccessToken, async (req,res)=>{
   try{
     const id = req.params.id;
     const { text } = req.body;
@@ -232,8 +349,8 @@ app.post('/api/chats/:id/messages', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// Notifications - simple
-app.post('/api/notifications', authenticateJWT, async (req,res)=>{
+// === Notifications ===
+app.post('/api/notifications', authenticateAccessToken, async (req,res)=>{
   try{
     const { title, body, to_email } = req.body;
     if(!title || !body || !to_email) return res.status(400).json({ error: 'Missing fields' });
@@ -242,7 +359,7 @@ app.post('/api/notifications', authenticateJWT, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-app.get('/api/notifications', authenticateJWT, async (req,res)=>{
+app.get('/api/notifications', authenticateAccessToken, async (req,res)=>{
   try{
     const to = req.query.to;
     if(!to) return res.status(400).json({ error: 'to query required' });
