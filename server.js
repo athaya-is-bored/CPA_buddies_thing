@@ -83,6 +83,15 @@ async function initDb(){
     created_at TEXT DEFAULT (datetime('now'))
   )`);
 
+  await runSql(db, `CREATE TABLE IF NOT EXISTS study_buddy_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_email TEXT,
+    to_email TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(from_email, to_email)
+  )`);
+
   // seed admin if not exists
   const adminEmail = 'athayacraven+admin@gmail.com';
   const existing = await getSql(db, 'SELECT * FROM users WHERE email = ?', [adminEmail]);
@@ -102,10 +111,11 @@ initDb().catch(err=>{ console.error('DB init failed', err); process.exit(1); });
 
 const app = express();
 app.use(cors({
-  origin: true, // in prod, specify exact origin
-  credentials: true // allow cookies
+  origin: true,
+  credentials: true
 }));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
 // serve static frontend files from repo root
@@ -159,21 +169,19 @@ async function getUserByEmail(email){
 }
 
 // === Authentication Middleware ===
-// Verify access token from HttpOnly cookie
 function authenticateAccessToken(req, res, next){
   const accessToken = req.cookies.accessToken;
   if(!accessToken) return res.status(401).json({ error: 'No access token' });
   
   jwt.verify(accessToken, ACCESS_TOKEN_SECRET, (err, payload)=>{
     if(err) return res.status(401).json({ error: 'Invalid access token' });
-    req.auth = payload; // contains email, status, id
+    req.auth = payload;
     next();
   });
 }
 
 // === Auth Endpoints ===
 
-// POST /api/auth/signup - create account (no auto-login)
 app.post('/api/auth/signup', async (req,res)=>{
   try{
     const { name, email, password } = req.body;
@@ -186,7 +194,6 @@ app.post('/api/auth/signup', async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/auth/login - authenticate and set HttpOnly cookies
 app.post('/api/auth/login', async (req,res)=>{
   try{
     const { email, password } = req.body;
@@ -196,25 +203,22 @@ app.post('/api/auth/login', async (req,res)=>{
     const ok = await bcrypt.compare(password, row.password_hash);
     if(!ok) return res.status(401).json({ error: 'Invalid credentials' });
     
-    // Generate tokens
     const accessToken = generateAccessToken({ email: row.email, status: row.status, id: row.id });
     const refreshToken = generateRefreshToken({ email: row.email, id: row.id });
     
-    // Store refresh token in DB
     await storeRefreshToken(row.id, refreshToken);
     
-    // Set HttpOnly cookies (not accessible to JS, sent automatically)
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 15 * 60 * 1000 // 15 minutes
+      maxAge: 15 * 60 * 1000
     });
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 7 * 24 * 60 * 60 * 1000
     });
     
     const user = sanitizeUserRow(row);
@@ -222,7 +226,6 @@ app.post('/api/auth/login', async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/auth/refresh - refresh access token using refresh token
 app.post('/api/auth/refresh', async (req,res)=>{
   try{
     const refreshToken = req.cookies.refreshToken;
@@ -235,7 +238,6 @@ app.post('/api/auth/refresh', async (req,res)=>{
       const isValid = await verifyRefreshToken(refreshToken, userId);
       if(!isValid) return res.status(401).json({ error: 'Refresh token not found or expired' });
       
-      // Fetch user and issue new access token
       const user = await getSql(db, 'SELECT * FROM users WHERE id = ?', [userId]);
       if(!user) return res.status(404).json({ error: 'User not found' });
       
@@ -252,21 +254,17 @@ app.post('/api/auth/refresh', async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/auth/logout - clear cookies and optionally invalidate refresh token
 app.post('/api/auth/logout', authenticateAccessToken, async (req,res)=>{
   try{
     const userId = req.auth.id;
-    // Delete all refresh tokens for this user (force re-login on all devices)
     await runSql(db, 'DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
     
-    // Clear cookies
     res.clearCookie('accessToken', { httpOnly: true, sameSite: 'strict' });
     res.clearCookie('refreshToken', { httpOnly: true, sameSite: 'strict' });
     return res.json({ message: 'Logged out' });
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// GET /api/auth/me - get current user from access token
 app.get('/api/auth/me', authenticateAccessToken, async (req,res)=>{
   try{
     const user = await getSql(db, 'SELECT * FROM users WHERE email = ?', [req.auth.email]);
@@ -277,7 +275,6 @@ app.get('/api/auth/me', authenticateAccessToken, async (req,res)=>{
 
 // === Account Setup ===
 
-// POST /api/account-setup - save security questions and status after signup
 app.post('/api/account-setup', async (req,res)=>{
   try{
     const { email, answers, status } = req.body;
@@ -288,14 +285,12 @@ app.post('/api/account-setup', async (req,res)=>{
     const user = await getUserByEmail(email);
     if(!user) return res.status(404).json({ error: 'User not found' });
     
-    // Save security answers as JSON
     const securityJson = JSON.stringify(answers);
     const userStatus = status || 'Student';
     
     await runSql(db, 'UPDATE users SET security = ?, status = ? WHERE email = ?', 
       [securityJson, userStatus, email]);
     
-    // Send notification to all admins
     const admins = await allSql(db, 'SELECT email FROM users WHERE status = ?', ['Admin']);
     const signupInfo = `User: ${user.name}\nEmail: ${user.email}\nStatus: ${userStatus}`;
     for(const admin of admins){
@@ -309,10 +304,8 @@ app.post('/api/account-setup', async (req,res)=>{
 
 // === Account Approval (Admin) ===
 
-// GET /api/admin/pending-approvals - get all unapproved accounts
 app.get('/api/admin/pending-approvals', authenticateAccessToken, async (req,res)=>{
   try{
-    // Check if requester is admin
     const requester = await getUserByEmail(req.auth.email);
     if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
     
@@ -321,23 +314,19 @@ app.get('/api/admin/pending-approvals', authenticateAccessToken, async (req,res)
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/admin/approve-user - approve a pending user
 app.post('/api/admin/approve-user', authenticateAccessToken, async (req,res)=>{
   try{
     const { userEmail } = req.body;
     if(!userEmail) return res.status(400).json({ error: 'Missing userEmail' });
     
-    // Check if requester is admin
     const requester = await getUserByEmail(req.auth.email);
     if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
     
     const user = await getUserByEmail(userEmail);
     if(!user) return res.status(404).json({ error: 'User not found' });
     
-    // Approve user
     await runSql(db, 'UPDATE users SET approved = 1 WHERE email = ?', [userEmail]);
     
-    // Send approval notification to user
     await runSql(db, 'INSERT INTO notifications (title, body, to_email) VALUES (?,?,?)',
       ['Account Approved!', 'Your account has been approved! You can now explore CPA Study Buddies.', userEmail]);
     
@@ -345,20 +334,17 @@ app.post('/api/admin/approve-user', authenticateAccessToken, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/admin/reject-user - reject a pending user (delete account)
 app.post('/api/admin/reject-user', authenticateAccessToken, async (req,res)=>{
   try{
     const { userEmail } = req.body;
     if(!userEmail) return res.status(400).json({ error: 'Missing userEmail' });
     
-    // Check if requester is admin
     const requester = await getUserByEmail(req.auth.email);
     if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
     
     const user = await getUserByEmail(userEmail);
     if(!user) return res.status(404).json({ error: 'User not found' });
     
-    // Delete user
     await runSql(db, 'DELETE FROM users WHERE email = ?', [userEmail]);
     
     res.json({ message: 'User rejected and deleted' });
@@ -367,7 +353,6 @@ app.post('/api/admin/reject-user', authenticateAccessToken, async (req,res)=>{
 
 // === Password Recovery ===
 
-// POST /api/auth/forgot-password - check if email exists
 app.post('/api/auth/forgot-password', async (req,res)=>{
   try{
     const { email } = req.body;
@@ -376,7 +361,6 @@ app.post('/api/auth/forgot-password', async (req,res)=>{
     const user = await getUserByEmail(email);
     if(!user) return res.status(404).json({ error: 'Email not found. Please check spelling and try again.' });
     
-    // Return a random security question from their saved answers
     const security = JSON.parse(user.security || '{}');
     const questions = {
       q1: 'What was your first pet\'s name?',
@@ -391,14 +375,11 @@ app.post('/api/auth/forgot-password', async (req,res)=>{
       q10: 'What is your mother\'s father\'s name?'
     };
     
-    // Pick a random answered question
     const answeredKeys = Object.keys(security).filter(k => security[k]);
     if(answeredKeys.length === 0) return res.status(400).json({ error: 'No security questions set' });
     
     const randomKey = answeredKeys[Math.floor(Math.random() * answeredKeys.length)];
     
-    // Store state temporarily (in production, use Redis or secure session storage)
-    // For now, return the key and client will remember it
     res.json({ 
       message: 'Question retrieved',
       question: questions[randomKey],
@@ -408,7 +389,6 @@ app.post('/api/auth/forgot-password', async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/auth/verify-recovery-answer - verify security answer
 app.post('/api/auth/verify-recovery-answer', async (req,res)=>{
   try{
     const { email, questionKey, answer } = req.body;
@@ -420,19 +400,16 @@ app.post('/api/auth/verify-recovery-answer', async (req,res)=>{
     const security = JSON.parse(user.security || '{}');
     const storedAnswer = security[questionKey];
     
-    // Case-insensitive comparison
     if(!storedAnswer || storedAnswer.toLowerCase() !== answer.toLowerCase()){
       return res.status(401).json({ error: 'Incorrect. Please try again.' });
     }
     
-    // Generate a temporary reset token (short-lived, use different secret)
     const resetToken = jwt.sign({ email, resetIntent: true }, ACCESS_TOKEN_SECRET, { expiresIn: '10m' });
     
     res.json({ message: 'Answer verified', resetToken });
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// POST /api/auth/reset-password - reset password with reset token
 app.post('/api/auth/reset-password', async (req,res)=>{
   try{
     const { email, resetToken, newPassword, repeatPassword } = req.body;
@@ -442,7 +419,6 @@ app.post('/api/auth/reset-password', async (req,res)=>{
     if(newPassword !== repeatPassword)
       return res.status(400).json({ error: 'Your password does not match your repeated password. Please check spelling and try again.' });
     
-    // Verify reset token
     jwt.verify(resetToken, ACCESS_TOKEN_SECRET, async (err, payload)=>{
       if(err || !payload.resetIntent || payload.email !== email)
         return res.status(401).json({ error: 'Invalid reset token' });
@@ -464,15 +440,16 @@ app.post('/api/auth/reset-password', async (req,res)=>{
 });
 
 // === Users ===
+
 app.get('/api/users', authenticateAccessToken, async (req,res)=>{
   try{
     const q = (req.query.q || '').trim();
     let rows;
     if(q){
       const qlike = `%${q}%`;
-      rows = await allSql(db, `SELECT * FROM users WHERE name LIKE ? OR bio LIKE ? ORDER BY CASE WHEN status='Admin' THEN 0 WHEN status='Teacher' THEN 1 ELSE 2 END, name asc`, [qlike, qlike]);
+      rows = await allSql(db, `SELECT * FROM users WHERE approved = 1 AND (name LIKE ? OR bio LIKE ?) ORDER BY CASE WHEN status='Admin' THEN 0 WHEN status='Teacher' THEN 1 ELSE 2 END, name asc`, [qlike, qlike]);
     } else {
-      rows = await allSql(db, `SELECT * FROM users ORDER BY CASE WHEN status='Admin' THEN 0 WHEN status='Teacher' THEN 1 ELSE 2 END, name asc`);
+      rows = await allSql(db, `SELECT * FROM users WHERE approved = 1 ORDER BY CASE WHEN status='Admin' THEN 0 WHEN status='Teacher' THEN 1 ELSE 2 END, name asc`);
     }
     const users = rows.map(r=>sanitizeUserRow(r));
     res.json({ users });
@@ -485,7 +462,6 @@ app.get('/api/users/:email', authenticateAccessToken, async (req,res)=>{
     const row = await getUserByEmail(email);
     if(!row) return res.status(404).json({ error: 'Not found' });
     const user = sanitizeUserRow(row);
-    // Respect email visibility: if email_public is true or requester is self or admin, expose email
     const requester = req.auth && req.auth.email;
     const requesterRow = requester ? await getUserByEmail(requester) : null;
     const requesterIsAdmin = requesterRow && requesterRow.status === 'Admin';
@@ -494,7 +470,262 @@ app.get('/api/users/:email', authenticateAccessToken, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// === Profile Updates ===
+
+app.put('/api/users/:email', authenticateAccessToken, async (req,res)=>{
+  try{
+    const targetEmail = req.params.email;
+    const { name, bio, classes } = req.body;
+    
+    const requester = await getUserByEmail(req.auth.email);
+    const target = await getUserByEmail(targetEmail);
+    if(!target) return res.status(404).json({ error: 'User not found' });
+    
+    // Can only edit self, or admin/teacher can edit students
+    const isAdmin = requester.status === 'Admin';
+    const isTeacher = requester.status === 'Teacher';
+    const isSelf = requester.email === targetEmail;
+    
+    if(!isSelf && !isAdmin && !isTeacher) return res.status(403).json({ error: 'Unauthorized' });
+    if(!isSelf && isTeacher && target.status !== 'Student') return res.status(403).json({ error: 'Teachers can only edit students' });
+    
+    const updates = {};
+    if(name !== undefined) updates.name = name;
+    if(bio !== undefined) updates.bio = bio;
+    if(classes !== undefined) updates.classes = JSON.stringify(classes);
+    
+    const setClause = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    const values = [...Object.values(updates), targetEmail];
+    
+    await runSql(db, `UPDATE users SET ${setClause} WHERE email = ?`, values);
+    
+    res.json({ message: 'Profile updated' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// === Settings ===
+
+app.put('/api/settings/password', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { currentPassword, newPassword, repeatPassword } = req.body;
+    if(!currentPassword || !newPassword || !repeatPassword)
+      return res.status(400).json({ error: 'Missing fields' });
+    
+    if(newPassword !== repeatPassword)
+      return res.status(400).json({ error: 'Repeated password does not match. Please try again.' });
+    
+    const user = await getUserByEmail(req.auth.email);
+    const isValid = await bcrypt.compare(currentPassword, user.password_hash);
+    if(!isValid) return res.status(401).json({ error: 'Current password is incorrect. Please try again.' });
+    
+    const hash = await bcrypt.hash(newPassword, 10);
+    await runSql(db, 'UPDATE users SET password_hash = ? WHERE email = ?', [hash, req.auth.email]);
+    
+    res.json({ message: 'Password updated' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.put('/api/settings/email-visibility', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { email_public } = req.body;
+    const val = email_public ? 1 : 0;
+    await runSql(db, 'UPDATE users SET email_public = ? WHERE email = ?', [val, req.auth.email]);
+    res.json({ message: 'Email visibility updated' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.put('/api/settings/security-questions', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { answers } = req.body;
+    const answerCount = Object.keys(answers || {}).filter(k => answers[k]).length;
+    if(answerCount < 4) return res.status(400).json({ error: 'At least 4 Security Questions are required. Please add more, then try again.' });
+    
+    const securityJson = JSON.stringify(answers);
+    await runSql(db, 'UPDATE users SET security = ? WHERE email = ?', [securityJson, req.auth.email]);
+    
+    res.json({ message: 'Security Questions successfully updated!' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/settings/reset-profile', authenticateAccessToken, async (req,res)=>{
+  try{
+    await runSql(db, 'UPDATE users SET bio = ?, classes = ?, email_public = 0 WHERE email = ?', 
+      ['', '[]', req.auth.email]);
+    res.json({ message: 'Profile reset' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.delete('/api/settings/delete-account', authenticateAccessToken, async (req,res)=>{
+  try{
+    const email = req.auth.email;
+    await runSql(db, 'DELETE FROM refresh_tokens WHERE user_id = (SELECT id FROM users WHERE email = ?)', [email]);
+    await runSql(db, 'DELETE FROM users WHERE email = ?', [email]);
+    
+    res.clearCookie('accessToken', { httpOnly: true, sameSite: 'strict' });
+    res.clearCookie('refreshToken', { httpOnly: true, sameSite: 'strict' });
+    
+    res.json({ message: 'Account deleted' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// === Study Buddies ===
+
+app.get('/api/study-buddies/with-classes', authenticateAccessToken, async (req,res)=>{
+  try{
+    const user = await getUserByEmail(req.auth.email);
+    const userClasses = user.classes ? JSON.parse(user.classes) : [];
+    
+    if(userClasses.length === 0) return res.json({ hasClasses: false });
+    
+    // Get all approved users with shared classes, excluding self and already messaged
+    const query = `
+      SELECT DISTINCT u.* FROM users u
+      WHERE u.email != ? AND u.approved = 1
+      AND (u.classes LIKE ${userClasses.map(() => '?').join(' OR u.classes LIKE ')})
+      ORDER BY RANDOM()
+      LIMIT 5
+    `;
+    const patterns = userClasses.map(c => `%"${c}"%`);
+    const buddies = await allSql(db, query, [req.auth.email, ...patterns]);
+    
+    res.json({ hasClasses: true, buddies: buddies.map(b => sanitizeUserRow(b)) });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.get('/api/study-buddies/shared-classes', authenticateAccessToken, async (req,res)=>{
+  try{
+    const user = await getUserByEmail(req.auth.email);
+    const userClasses = user.classes ? JSON.parse(user.classes) : [];
+    
+    if(userClasses.length === 0) return res.json({ users: [] });
+    
+    const q = (req.query.q || '').trim();
+    const qlike = `%${q}%`;
+    const classPatterns = userClasses.map(c => `%"${c}"%`);
+    
+    let query = `
+      SELECT DISTINCT u.* FROM users u
+      WHERE u.email != ? AND u.approved = 1 AND u.status = 'Student'
+      AND (${classPatterns.map(() => 'u.classes LIKE ?').join(' OR ')})
+    `;
+    const params = [req.auth.email, ...classPatterns];
+    
+    if(q){
+      query += ` AND (u.name LIKE ? OR u.bio LIKE ?)`;
+      params.push(qlike, qlike);
+    }
+    
+    query += ` ORDER BY u.name ASC`;
+    
+    const users = await allSql(db, query, params);
+    res.json({ users: users.map(u => sanitizeUserRow(u)) });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/study-buddies/invite', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { toEmail } = req.body;
+    if(!toEmail) return res.status(400).json({ error: 'Missing toEmail' });
+    
+    await runSql(db, 'INSERT OR IGNORE INTO study_buddy_invites (from_email, to_email, status) VALUES (?,?,?)',
+      [req.auth.email, toEmail, 'pending']);
+    
+    await runSql(db, 'INSERT INTO notifications (title, body, to_email) VALUES (?,?,?)',
+      ['Study Buddy Invite', `You have been invited to study with ${(await getUserByEmail(req.auth.email)).name}. Accept/Decline in the Study Buddies tab.`, toEmail]);
+    
+    res.status(201).json({ message: 'Invite sent' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.get('/api/study-buddies/invites', authenticateAccessToken, async (req,res)=>{
+  try{
+    const invites = await allSql(db, 'SELECT * FROM study_buddy_invites WHERE to_email = ? AND status = ?', 
+      [req.auth.email, 'pending']);
+    res.json({ invites });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/study-buddies/respond', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { inviteId, response } = req.body;
+    if(!inviteId || !response) return res.status(400).json({ error: 'Missing fields' });
+    
+    const invite = await getSql(db, 'SELECT * FROM study_buddy_invites WHERE id = ?', [inviteId]);
+    if(!invite) return res.status(404).json({ error: 'Invite not found' });
+    if(invite.to_email !== req.auth.email) return res.status(403).json({ error: 'Unauthorized' });
+    
+    const newStatus = response === 'accept' ? 'accepted' : 'declined';
+    await runSql(db, 'UPDATE study_buddy_invites SET status = ? WHERE id = ?', [newStatus, inviteId]);
+    
+    const title = response === 'accept' ? 'Study Buddy Invite Accepted' : 'Study Buddy Invite Declined';
+    const currentUser = await getUserByEmail(req.auth.email);
+    const body = response === 'accept' 
+      ? `${currentUser.name} has accepted your invite!`
+      : `${currentUser.name} has declined your invite.`;
+    
+    await runSql(db, 'INSERT INTO notifications (title, body, to_email) VALUES (?,?,?)',
+      [title, body, invite.from_email]);
+    
+    res.json({ message: 'Response recorded' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// === Admin Dashboard - User Management ===
+
+app.post('/api/admin/promote-user', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { userEmail, newStatus } = req.body;
+    if(!userEmail || !newStatus) return res.status(400).json({ error: 'Missing fields' });
+    
+    const requester = await getUserByEmail(req.auth.email);
+    if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
+    
+    const target = await getUserByEmail(userEmail);
+    if(!target) return res.status(404).json({ error: 'User not found' });
+    
+    // Admins can't change other admins' status
+    if(target.status === 'Admin') return res.status(403).json({ error: 'Cannot change admin status' });
+    
+    await runSql(db, 'UPDATE users SET status = ? WHERE email = ?', [newStatus, userEmail]);
+    
+    res.json({ message: 'User status updated' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/admin/suspend-user', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { userEmail, suspendUntil } = req.body;
+    if(!userEmail || !suspendUntil) return res.status(400).json({ error: 'Missing fields' });
+    
+    const requester = await getUserByEmail(req.auth.email);
+    if(requester.status !== 'Admin' && requester.status !== 'Teacher') return res.status(403).json({ error: 'Unauthorized' });
+    
+    const target = await getUserByEmail(userEmail);
+    if(!target) return res.status(404).json({ error: 'User not found' });
+    if(target.status !== 'Student') return res.status(403).json({ error: 'Can only suspend students' });
+    
+    await runSql(db, 'UPDATE users SET suspended_until = ? WHERE email = ?', [suspendUntil, userEmail]);
+    
+    res.json({ message: 'User suspended' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/admin/unsuspend-user', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { userEmail } = req.body;
+    if(!userEmail) return res.status(400).json({ error: 'Missing userEmail' });
+    
+    const requester = await getUserByEmail(req.auth.email);
+    if(requester.status !== 'Admin' && requester.status !== 'Teacher') return res.status(403).json({ error: 'Unauthorized' });
+    
+    await runSql(db, 'UPDATE users SET suspended_until = NULL WHERE email = ?', [userEmail]);
+    
+    res.json({ message: 'User unsuspended' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // === Chats ===
+
 app.post('/api/chats', authenticateAccessToken, async (req,res)=>{
   try{
     const { id, type, participants, name } = req.body;
@@ -538,6 +769,7 @@ app.post('/api/chats/:id/messages', authenticateAccessToken, async (req,res)=>{
 });
 
 // === Notifications ===
+
 app.post('/api/notifications', authenticateAccessToken, async (req,res)=>{
   try{
     const { title, body, to_email } = req.body;
@@ -551,12 +783,26 @@ app.get('/api/notifications', authenticateAccessToken, async (req,res)=>{
   try{
     const to = req.query.to;
     if(!to) return res.status(400).json({ error: 'to query required' });
-    const rows = await allSql(db, 'SELECT * FROM notifications WHERE to_email = ? ORDER BY created_at DESC', [to]);
+    const rows = await allSql(db, 'SELECT * FROM notifications WHERE to_email = ? AND created_at > datetime("now","-30 days") ORDER BY created_at DESC', [to]);
     res.json({ notifications: rows });
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-// maintenance: delete notifications older than 30 days
+app.put('/api/notifications/:id', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { read } = req.body;
+    await runSql(db, 'UPDATE notifications SET read = ? WHERE id = ?', [read ? 1 : 0, req.params.id]);
+    res.json({ message: 'Notification updated' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.delete('/api/notifications/:id', authenticateAccessToken, async (req,res)=>{
+  try{
+    await runSql(db, 'DELETE FROM notifications WHERE id = ?', [req.params.id]);
+    res.json({ message: 'Notification deleted' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 app.post('/api/maintenance/cleanup_notifications', async (req,res)=>{
   try{
     await runSql(db, `DELETE FROM notifications WHERE created_at < datetime('now','-30 days')`);
