@@ -1,4 +1,4 @@
-// script.js - updated to use JWT authentication and wire Users + Messages to API
+// script.js - Frontend with cookie-based authentication (HttpOnly cookies)
 (function(){
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
@@ -42,88 +42,199 @@
     })
   });
 
-  // API helpers (include Authorization if token present)
-  function authHeaders(){
-    const token = localStorage.getItem('token');
-    return token ? { 'Authorization': 'Bearer '+token } : {};
+  // API helpers - cookies sent automatically, no need to attach headers
+  async function apiFetch(url, options = {}){
+    const defaultOptions = {
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include' // send cookies automatically
+    };
+    const response = await fetch(url, { ...defaultOptions, ...options });
+    
+    // Handle 401 - try to refresh token
+    if(response.status === 401){
+      const refreshed = await refreshAccessToken();
+      if(refreshed){
+        // Retry original request with new token
+        return await fetch(url, { ...defaultOptions, ...options });
+      } else {
+        // Refresh failed, redirect to login
+        logout();
+        return response;
+      }
+    }
+    return response;
   }
+
+  async function refreshAccessToken(){
+    try{
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        credentials: 'include'
+      });
+      return res.ok;
+    }catch(err){
+      console.error('Token refresh failed', err);
+      return false;
+    }
+  }
+
   async function apiSignup(name,email,password){
     const res = await fetch('/api/auth/signup', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, email, password })
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name, email, password }),
+      credentials: 'include'
     });
     return res;
   }
+
   async function apiLogin(email,password){
     const res = await fetch('/api/auth/login', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ email, password })
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password }),
+      credentials: 'include'
     });
     return res;
   }
+
+  async function apiGetCurrentUser(){
+    const res = await apiFetch('/api/auth/me');
+    if(!res.ok) throw new Error('Failed to fetch current user');
+    return res.json();
+  }
+
   async function apiGetUser(email){
-    const res = await fetch(`/api/users/${encodeURIComponent(email)}`, { headers: { ...authHeaders() } });
+    const res = await apiFetch(`/api/users/${encodeURIComponent(email)}`);
     if(!res.ok) throw new Error('User fetch failed');
     return res.json();
   }
+
   async function apiGetUsers(q){
     const url = q ? `/api/users?q=${encodeURIComponent(q)}` : '/api/users';
-    const res = await fetch(url, { headers: { ...authHeaders() } });
+    const res = await apiFetch(url);
     if(!res.ok) throw new Error('Users fetch failed');
     return res.json();
   }
+
   async function apiGetChats(email){
-    const res = await fetch(`/api/chats?email=${encodeURIComponent(email)}`, { headers: { ...authHeaders() } });
+    const res = await apiFetch(`/api/chats?email=${encodeURIComponent(email)}`);
     if(!res.ok) throw new Error('Chats fetch failed');
     return res.json();
   }
+
   async function apiGetChatMessages(id){
-    const res = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { headers:{ ...authHeaders() } });
+    const res = await apiFetch(`/api/chats/${encodeURIComponent(id)}/messages`);
     if(!res.ok) throw new Error('Messages fetch failed');
     return res.json();
   }
+
   async function apiSendChatMessage(id, text){
-    const res = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { method:'POST', headers:{ 'Content-Type':'application/json', ...authHeaders() }, body: JSON.stringify({ text }) });
+    const res = await apiFetch(`/api/chats/${encodeURIComponent(id)}/messages`, {
+      method:'POST',
+      body: JSON.stringify({ text })
+    });
     return res;
   }
+
   async function apiCreateChat(payload){
-    const res = await fetch('/api/chats', { method:'POST', headers:{ 'Content-Type':'application/json', ...authHeaders() }, body: JSON.stringify(payload) });
+    const res = await apiFetch('/api/chats', {
+      method:'POST',
+      body: JSON.stringify(payload)
+    });
     return res;
   }
 
-  // initial auth helpers
-  function isLoggedIn(){ return !!localStorage.getItem('token'); }
-  function getToken(){ return localStorage.getItem('token'); }
-  function getAccountEmail(){ return localStorage.getItem('accountEmail') || null; }
+  async function apiAccountSetup(email, answers, status){
+    const res = await fetch('/api/account-setup', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, answers, status }),
+      credentials: 'include'
+    });
+    return res;
+  }
 
+  async function apiGetPendingApprovals(){
+    const res = await apiFetch('/api/admin/pending-approvals');
+    if(!res.ok) throw new Error('Failed to fetch pending approvals');
+    return res.json();
+  }
+
+  async function apiApproveUser(userEmail){
+    const res = await apiFetch('/api/admin/approve-user', {
+      method:'POST',
+      body: JSON.stringify({ userEmail })
+    });
+    return res;
+  }
+
+  async function apiRejectUser(userEmail){
+    const res = await apiFetch('/api/admin/reject-user', {
+      method:'POST',
+      body: JSON.stringify({ userEmail })
+    });
+    return res;
+  }
+
+  async function apiForgotPassword(email){
+    const res = await fetch('/api/auth/forgot-password', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email }),
+      credentials: 'include'
+    });
+    return res;
+  }
+
+  async function apiVerifyRecoveryAnswer(email, questionKey, answer){
+    const res = await fetch('/api/auth/verify-recovery-answer', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, questionKey, answer }),
+      credentials: 'include'
+    });
+    return res;
+  }
+
+  async function apiResetPassword(email, resetToken, newPassword, repeatPassword){
+    const res = await fetch('/api/auth/reset-password', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, resetToken, newPassword, repeatPassword }),
+      credentials: 'include'
+    });
+    return res;
+  }
+
+  async function apiLogout(){
+    const res = await apiFetch('/api/auth/logout', { method:'POST' });
+    return res;
+  }
+
+  // State management
+  let currentUser = null;
   const accountNameSpan = document.getElementById('accountName');
 
-  // refreshAuth: if token stored, fetch their user record from API to get up-to-date status/role
+  // refreshAuth: fetch current user from API (cookies handle auth)
   function refreshAuth(){
-    const token = getToken();
-    if(!token){
+    apiGetCurrentUser().then(data=>{
+      currentUser = data.user;
+      accountNameSpan.textContent = currentUser.name || 'Guest';
+      authGate.classList.add('hidden');
+      document.getElementById('homePage').classList.remove('hidden');
+      renderSidebarLinksForRole(currentUser.status);
+    }).catch(err => {
+      console.error('Failed to fetch current user', err);
+      // Not logged in
       authGate.classList.remove('hidden');
       document.getElementById('homePage').classList.add('hidden');
       document.querySelectorAll('.admin-link, .teacher-link').forEach(el=>el.classList.add('hidden'));
-      return;
-    }
-    const email = localStorage.getItem('accountEmail');
-    if(!email){ authGate.classList.remove('hidden'); return; }
-    apiGetUser(email).then(data=>{
-      const acc = data.user;
-      localStorage.setItem('currentUser', JSON.stringify(acc));
-      accountNameSpan.textContent = acc.name || 'Guest';
-      authGate.classList.add('hidden');
-      document.getElementById('homePage').classList.remove('hidden');
-      renderSidebarLinksForRole(acc.status);
-    }).catch(err => {
-      console.error('Failed to fetch current user', err);
-      // token might be invalid
-      localStorage.removeItem('token');
-      localStorage.removeItem('accountEmail');
-      authGate.classList.remove('hidden');
+      currentUser = null;
     });
   }
+
+  // Call refreshAuth on load
   refreshAuth();
 
   // Render admin/teacher links based on role
@@ -150,6 +261,8 @@
     if(document.getElementById('messagesPage')) document.getElementById('messagesPage').classList.add('hidden');
     if(page === 'home'){
       document.getElementById('homePage').classList.remove('hidden');
+    } else if(page === 'admin'){
+      renderAdminDashboard();
     } else if(page === 'users'){
       renderUsersPage();
     } else if(page === 'messages'){
@@ -160,13 +273,13 @@
     }
   }
 
-  // auth actions
+  // ===== Auth Actions =====
   document.getElementById('showSignIn').addEventListener('click', ()=>{ signInModal.classList.remove('hidden'); });
   document.getElementById('showSignUp').addEventListener('click', ()=>{ signUpModal.classList.remove('hidden'); });
   document.getElementById('signinCancel').addEventListener('click', ()=>{ signInModal.classList.add('hidden'); });
   document.getElementById('signupCancel').addEventListener('click', ()=>{ signUpModal.classList.add('hidden'); });
 
-  // Sign in: call API and store JWT
+  // Sign in: call API and cookies are set automatically
   document.getElementById('signinSubmit').addEventListener('click', async ()=>{
     const email = document.getElementById('signin-email').value.trim();
     const password = document.getElementById('signin-password').value.trim();
@@ -182,12 +295,7 @@
         return;
       }
       const data = await res.json();
-      const token = data.token;
       const user = data.user;
-      // store token and email
-      localStorage.setItem('token', token);
-      localStorage.setItem('accountEmail', user.email);
-      localStorage.setItem('accountName', user.name || '');
       signInModal.classList.add('hidden');
       if(!user.approved){
         showAwaitingApproval();
@@ -211,12 +319,11 @@
     try{
       const res = await apiSignup(name,email,password);
       if(res.status === 201){
-        localStorage.setItem('pendingSetupEmail', email);
         signUpModal.classList.add('hidden');
         authGate.classList.add('hidden');
         if(document.getElementById('accountSetupPage')){
           document.getElementById('homePage').classList.add('hidden');
-          document.getElementById('accountSetupPage').classList.remove('hidden');
+          showAccountSetup(email);
         } else {
           showAwaitingApproval();
         }
@@ -231,7 +338,67 @@
     }
   });
 
-  // Forgot password flow - remains client-assisted until server recovery endpoints added
+  // ===== Account Setup Page =====
+  function showAccountSetup(email){
+    const page = document.getElementById('accountSetupPage');
+    page.classList.remove('hidden');
+    
+    document.getElementById('submitSetup').addEventListener('click', async ()=>{
+      const answers = {};
+      let count = 0;
+      for(let i=1; i<=10; i++){
+        const inp = document.querySelector(`input[name="q${i}"]`);
+        if(inp && inp.value.trim()){
+          answers[`q${i}`] = inp.value.trim();
+          count++;
+        }
+      }
+      const status = document.getElementById('setupStatus').value;
+      
+      const err = document.getElementById('setupError');
+      err.classList.add('hidden');
+      
+      if(count < 4){
+        err.textContent = 'At least 4 security answers are required.';
+        err.classList.remove('hidden');
+        return;
+      }
+      
+      try{
+        const res = await apiAccountSetup(email, answers, status);
+        if(res.ok){
+          page.classList.add('hidden');
+          showAwaitingApproval();
+        } else {
+          const body = await res.json().catch(()=>{});
+          err.textContent = (body && body.error) || 'Account setup failed';
+          err.classList.remove('hidden');
+        }
+      }catch(e){
+        console.error(e);
+        err.textContent = 'Account setup failed';
+        err.classList.remove('hidden');
+      }
+    }, { once: true });
+    
+    document.getElementById('whyRequiredToggle').addEventListener('click', (e)=>{
+      e.preventDefault();
+      const toggle = document.getElementById('whyRequired');
+      toggle.classList.toggle('hidden');
+    });
+  }
+
+  function showAwaitingApproval(){
+    const html = `
+      <section class="page">
+        <h1>Awaiting Approval</h1>
+        <p>Thank you for signing up! To verify that you are a CPA student/teacher, a mod will check your submission manually. Once you are approved, you will receive a notification and are free to explore! You can expect to be approved within a week. Thank you for your patience!</p>
+      </section>
+    `;
+    document.getElementById('appContent').innerHTML = html;
+  }
+
+  // ===== Password Recovery =====
   document.getElementById('forgotLink').addEventListener('click', (e)=>{
     e.preventDefault();
     signInModal.classList.add('hidden');
@@ -239,41 +406,122 @@
   });
   document.getElementById('forgotCancel').addEventListener('click', ()=>{ forgotModal.classList.add('hidden'); });
 
-  document.getElementById('forgotSubmit').addEventListener('click', ()=>{
+  let recoveryState = {};
+  
+  document.getElementById('forgotSubmit').addEventListener('click', async ()=>{
     const email = document.getElementById('forgotEmail').value.trim();
-    const err = document.getElementById('forgotError'); err.classList.add('hidden');
+    const err = document.getElementById('forgotError');
+    err.classList.add('hidden');
     if(!email){ err.textContent = 'Please enter an email.'; err.classList.remove('hidden'); return; }
-    fetch(`/api/users/${encodeURIComponent(email)}`, { headers: {...authHeaders()} }).then(r=>{
-      if(!r.ok) throw new Error('not found');
-      return r.json();
-    }).then(data=>{
-      localStorage.setItem('passwordRecoveryEmail', email);
+    
+    try{
+      const res = await apiForgotPassword(email);
+      if(!res.ok){
+        const body = await res.json().catch(()=>{});
+        err.textContent = (body && body.error) || 'Email not found. Please check spelling and try again.';
+        err.classList.remove('hidden');
+        return;
+      }
+      
+      const data = await res.json();
+      recoveryState = { email, questionKey: data.questionKey };
+      
       forgotModal.classList.add('hidden');
-      alert('Server-side recovery flow is not finished yet; please contact an admin for now.');
-    }).catch(()=>{
-      document.getElementById('forgotError').textContent = 'Email not found. Please check spelling and try again.'; document.getElementById('forgotError').classList.remove('hidden');
-    });
-  });
-
-  function showAwaitingApproval(){
-    const html = `\n      <section class="page">\n        <h1>Awaiting Approval</h1>\n        <p>Thank you for signing up! To verify that you are a CPA student/teacher, a mod will check your submission manually. Once you are approved, you will receive an email and are free to explore! You can expect to be approved within a week. Thank you for your patience!</p>\n      </section>`;
-    document.getElementById('appContent').innerHTML = html;
-  }
-
-  // logout
-  document.getElementById('logoutLink').addEventListener('click', (e)=>{
-    e.preventDefault();
-    if(confirm('Are you sure you would like to logout?')){
-      localStorage.removeItem('token');
-      localStorage.removeItem('accountEmail');
-      localStorage.removeItem('accountName');
-      localStorage.removeItem('currentUser');
-      refreshAuth();
-      location.reload();
+      document.getElementById('recoveryQuestion').textContent = data.question;
+      recoveryModal.classList.remove('hidden');
+    }catch(e){
+      console.error(e);
+      err.textContent = 'Error'; err.classList.remove('hidden');
     }
   });
 
-  // Users page wiring
+  document.getElementById('recoveryCancel').addEventListener('click', ()=>{ recoveryModal.classList.add('hidden'); });
+
+  document.getElementById('recoverySubmit').addEventListener('click', async ()=>{
+    const answer = document.getElementById('recoveryAnswer').value.trim();
+    const err = document.getElementById('recoveryError');
+    err.classList.add('hidden');
+    if(!answer){ err.textContent = 'Please enter an answer.'; err.classList.remove('hidden'); return; }
+    
+    try{
+      const res = await apiVerifyRecoveryAnswer(recoveryState.email, recoveryState.questionKey, answer);
+      if(!res.ok){
+        const body = await res.json().catch(()=>{});
+        err.textContent = (body && body.error) || 'Incorrect. Please try again.';
+        err.classList.remove('hidden');
+        document.getElementById('recoveryAnswer').value = '';
+        return;
+      }
+      
+      const data = await res.json();
+      recoveryState.resetToken = data.resetToken;
+      
+      recoveryModal.classList.add('hidden');
+      showResetPassword();
+    }catch(e){
+      console.error(e);
+      err.textContent = 'Error'; err.classList.remove('hidden');
+    }
+  });
+
+  function showResetPassword(){
+    document.getElementById('resetNew').value = '';
+    document.getElementById('resetRepeat').value = '';
+    document.getElementById('resetError').classList.add('hidden');
+    resetModal.classList.remove('hidden');
+  }
+
+  document.getElementById('resetCancel').addEventListener('click', ()=>{ resetModal.classList.add('hidden'); });
+
+  document.getElementById('resetSubmit').addEventListener('click', async ()=>{
+    const newPassword = document.getElementById('resetNew').value.trim();
+    const repeatPassword = document.getElementById('resetRepeat').value.trim();
+    const err = document.getElementById('resetError');
+    err.classList.add('hidden');
+    
+    if(!newPassword || !repeatPassword){
+      err.textContent = 'Please fill in all fields.'; err.classList.remove('hidden'); return;
+    }
+    
+    try{
+      const res = await apiResetPassword(recoveryState.email, recoveryState.resetToken, newPassword, repeatPassword);
+      if(!res.ok){
+        const body = await res.json().catch(()=>{});
+        err.textContent = (body && body.error) || 'Password reset failed';
+        err.classList.remove('hidden');
+        return;
+      }
+      
+      resetModal.classList.add('hidden');
+      alert('Password reset successfully! Please sign in with your new password.');
+      recoveryState = {};
+      authGate.classList.remove('hidden');
+      document.getElementById('appContent').innerHTML = '<section id="homePage" class="page"><h1 class="page-title">Welcome back, <span id="accountName">Guest</span>!</h1></section>';
+    }catch(e){
+      console.error(e);
+      err.textContent = 'Error'; err.classList.remove('hidden');
+    }
+  });
+
+  // ===== Logout =====
+  function logout(){
+    apiLogout().then(()=>{
+      refreshAuth();
+      location.reload();
+    }).catch(err=>{
+      console.error(err);
+      location.reload();
+    });
+  }
+
+  document.getElementById('logoutLink').addEventListener('click', (e)=>{
+    e.preventDefault();
+    if(confirm('Are you sure you would like to logout?')){
+      logout();
+    }
+  });
+
+  // ===== Users Page =====
   async function renderUsersPage(){
     try{
       const container = document.getElementById('appContent');
@@ -284,6 +532,7 @@
       await loadUsers();
     }catch(err){ console.error(err); }
   }
+
   async function loadUsers(q=''){
     try{
       const res = await apiGetUsers(q);
@@ -297,7 +546,7 @@
         const name = document.createElement('a'); name.href='#'; name.textContent = u.name; name.style.color='#333333'; name.style.textDecoration='none';
         name.addEventListener('mouseover', ()=>{ name.style.opacity = '0.9' }); name.addEventListener('mouseout', ()=>{ name.style.opacity = '1' });
         name.addEventListener('click', (ev)=>{ ev.preventDefault(); openProfile(u.email); });
-        const tag = document.createElement('div'); tag.textContent = u.status; tag.style.marginLeft='auto'; tag.style.background='#bee6ef'; tag.style.padding='4px 8px'; tag.style.borderRadius='8px'; tag.style.fontSize='12px';
+        const tag = document.createElement('div'); tag.textContent = u.status; tag.style.marginLeft='auto'; tag.style.background='#bee6ef'; tag.style.padding='4px 8px'; tag.style.borderRadius='8px'; tag.style.fontWeight='700';
         row.appendChild(pfp); row.appendChild(name); row.appendChild(tag);
         list.appendChild(row);
       });
@@ -305,20 +554,46 @@
   }
 
   function openProfile(email){
-    // fetch user and render a simple profile view
     apiGetUser(email).then(data=>{
       const u = data.user;
       const container = document.getElementById('appContent');
-      const html = `\n        <section class="page">\n          <div style=\"display:flex;align-items:center;justify-content:space-between;\">\n            <div style=\"display:flex;align-items:center\">\n              <div style=\"width:80px;height:80px;border-radius:50%;background:#e1e1e1;margin-right:16px\"></div>\n              <div>\n                <h2>${u.name}</h2>\n                <div style=\"color:#666\">${u.status}</div>\n              </div>\n            </div>\n            <div>\n              ${ u.email ? `<div style=\"color:#333\">${u.email}</div>` : '' }\n            </div>\n          </div>\n          <div style=\"margin-top:16px;padding:12px;border-radius:8px;background:#fff;\">\n            <div>${u.bio || ''}</div>\n            <div style=\"margin-top:12px\"><strong>Classes</strong><div>${(u.classes||[]).join(', ')}</div></div>\n          </div>\n        </section>`;
+      const html = `
+        <section class="page">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:20px;">
+              <div style="width:80px;height:80px;border-radius:50%;background:#ddd;"></div>
+              <div>
+                <h1 style="margin:0;">${u.name}</h1>
+                <p style="margin:5px 0;color:#666;">${u.status}</p>
+              </div>
+            </div>
+            <button class="btn primary" id="messageBtn">Message</button>
+          </div>
+          <div class="card"><h3>Bio</h3><p>${u.bio || '(No bio set)'}</p></div>
+          <div class="card"><h3>Classes</h3><p>${u.classes.length > 0 ? u.classes.join(', ') : '(No classes set)'}</p></div>
+          ${u.email ? `<div class="card"><h3>Email</h3><p>${u.email}</p></div>` : ''}
+        </section>
+      `;
       container.innerHTML = html;
+      document.getElementById('messageBtn').addEventListener('click', ()=>{
+        navigateTo('messages');
+      });
     }).catch(err=>{ console.error(err); alert('Failed to load profile'); });
   }
 
-  // Messages page wiring (basic)
+  // ===== Messages Page =====
   async function renderMessagesPage(){
     const container = document.getElementById('appContent');
-    container.innerHTML = `\n      <section class=\"page\">\n        <h1>Messages</h1>\n        <div style=\"display:flex;gap:12px;\">\n          <div id=\"chatsList\" style=\"width:28%;background:#bee6ef;padding:12px;border-radius:8px;\">Loading...</div>\n          <div id=\"chatWindow\" style=\"flex:1;min-height:300px;padding:12px;background:#fff;border-radius:8px;\">Select a chat</div>\n        </div>\n      </section>`;
-    const email = localStorage.getItem('accountEmail');
+    container.innerHTML = `
+      <section class="page">
+        <h1>Messages</h1>
+        <div style="display:flex;gap:12px;">
+          <div id="chatsList" style="width:28%;background:#bee6ef;border-radius:10px;padding:12px;display:flex;flex-direction:column;height:70vh;"></div>
+          <div id="chatWindow" style="flex:1;background:#fff;border-radius:10px;padding:12px;height:70vh;"></div>
+        </div>
+      </section>
+    `;
+    const email = currentUser ? currentUser.email : null;
     if(!email){ container.querySelector('#chatsList').textContent='Sign in first'; return; }
     try{
       const res = await apiGetChats(email);
@@ -330,7 +605,7 @@
         row.addEventListener('click', ()=>{ openChat(c.id, c.name||''); });
         list.appendChild(row);
       });
-      const createBtn = document.createElement('button'); createBtn.textContent='Create New'; createBtn.style.marginTop='12px';
+      const createBtn = document.createElement('button'); createBtn.textContent='Create New'; createBtn.style.marginTop='12px'; createBtn.className='btn primary';
       createBtn.addEventListener('click', ()=>{ openCreateChat(); });
       list.appendChild(createBtn);
     }catch(err){ console.error(err); document.getElementById('chatsList').textContent='Failed to load chats'; }
@@ -341,13 +616,13 @@
     try{
       const res = await apiGetChatMessages(id);
       const msgs = res.messages || [];
-      const html = ['<div style="display:flex;flex-direction:column;gap:8px;">'];
+      const html = ['<div style="display:flex;flex-direction:column;gap:8px;height:100%;overflow:auto;">'];
       msgs.forEach(m=>{
-        const isMe = (m.sender === localStorage.getItem('accountEmail'));
-        html.push(`<div style="align-self:${isMe ? 'flex-start' : 'flex-end'};background:#bee6ef;padding:8px;border-radius:8px;max-width:70%">${isMe ? 'You' : m.sender}<div style="font-size:12px;color:#333">${m.text}</div><div style="font-size:10px;color:#666">${m.created_at}</div></div>`);
+        const isMe = (m.sender === currentUser.email);
+        html.push(`<div style="align-self:${isMe ? 'flex-start' : 'flex-end'};background:#bee6ef;padding:8px;border-radius:8px;max-width:70%"><strong>${isMe ? 'You' : m.sender}</strong><br/>${m.text}<br/><small style="color:#666;font-size:11px;">${new Date(m.created_at).toLocaleString()}</small></div>`);
       });
       html.push(`</div>`);
-      html.push(`<div style="margin-top:12px;display:flex;gap:8px;"><input id="msgInput" style="flex:1;padding:8px" /><button id="sendMsgBtn">Send</button></div>`);
+      html.push(`<div style="margin-top:12px;display:flex;gap:8px;"><input id="msgInput" style="flex:1;padding:8px" placeholder="Type a message..." /><button class="btn primary" id="sendMsgBtn">Send</button></div>`);
       container.innerHTML = html.join('\n');
       document.getElementById('sendMsgBtn').addEventListener('click', async ()=>{
         const v = document.getElementById('msgInput').value.trim(); if(!v) return;
@@ -358,7 +633,7 @@
   }
 
   async function openCreateChat(){
-    const email = localStorage.getItem('accountEmail');
+    const email = currentUser ? currentUser.email : null;
     const participant = prompt('Enter the email of the person to message (for demo)');
     if(!participant) return;
     const id = `dm-${[email,participant].sort().join('-')}`;
@@ -366,7 +641,67 @@
     renderMessagesPage();
   }
 
-  // initial navigation binding for top icons
+  // ===== Admin Dashboard =====
+  async function renderAdminDashboard(){
+    const container = document.getElementById('appContent');
+    container.innerHTML = '<section class="page"><h1>Admin Dashboard</h1><div id="adminContent">Loading...</div></section>';
+    
+    try{
+      const res = await apiGetPendingApprovals();
+      const pending = res.pending || [];
+      let html = '<h2>Pending Approvals</h2>';
+      
+      if(pending.length === 0){
+        html += '<p>No pending approvals.</p>';
+      } else {
+        pending.forEach(u=>{
+          html += `
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div><strong>${u.name}</strong><br/>${u.email}</div>
+                <div style="display:flex;gap:8px;">
+                  <button class="small-btn primary" onclick="window.approveUserFunc('${u.email}')">Approve</button>
+                  <button class="small-btn warn" onclick="window.rejectUserFunc('${u.email}')">Reject</button>
+                </div>
+              </div>
+            </div>
+          `;
+        });
+      }
+      
+      document.getElementById('adminContent').innerHTML = html;
+      
+      // Expose functions to window for onclick
+      window.approveUserFunc = async (email)=>{
+        try{
+          const res = await apiApproveUser(email);
+          if(res.ok){
+            alert('User approved!');
+            renderAdminDashboard();
+          } else {
+            alert('Failed to approve user');
+          }
+        }catch(err){ console.error(err); alert('Error'); }
+      };
+      
+      window.rejectUserFunc = async (email)=>{
+        try{
+          const res = await apiRejectUser(email);
+          if(res.ok){
+            alert('User rejected and deleted!');
+            renderAdminDashboard();
+          } else {
+            alert('Failed to reject user');
+          }
+        }catch(err){ console.error(err); alert('Error'); }
+      };
+    }catch(err){
+      console.error(err);
+      document.getElementById('adminContent').innerHTML = '<p>Failed to load admin dashboard</p>';
+    }
+  }
+
+  // ===== Navigation =====
   document.getElementById('homeIcon').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('home'); });
   document.getElementById('gearIcon').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('settings'); });
   document.getElementById('profilePicWrap').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('profile'); });
