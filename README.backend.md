@@ -2,11 +2,6 @@
 
 This adds a minimal Node/Express + SQLite backend to provide persistent storage for accounts, chats, messages, and notifications.
 
-Files added:
-- package.json
-- server.js
-- data.sqlite3 (created at runtime)
-
 How to run locally
 1. Install dependencies:
    npm install
@@ -19,5 +14,3 @@ How to run locally
 Notes
 - The backend seeds an Admin account (email: athayacraven+admin@gmail.com password: Admin) on first run.
 - Passwords are hashed with bcrypt.
-- This is a minimal API for local development. It does not include sessions or token-based authentication yet; endpoints are simple and intended for iterative development.
-- Next steps: integrate frontend to call these endpoints instead of using localStorage, add JWT or session-based auth, add input validation and rate-limiting, and consider production hardening.
