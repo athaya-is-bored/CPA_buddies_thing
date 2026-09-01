@@ -275,6 +275,194 @@ app.get('/api/auth/me', authenticateAccessToken, async (req,res)=>{
   }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// === Account Setup ===
+
+// POST /api/account-setup - save security questions and status after signup
+app.post('/api/account-setup', async (req,res)=>{
+  try{
+    const { email, answers, status } = req.body;
+    if(!email || !answers || Object.keys(answers).length < 4){
+      return res.status(400).json({ error: 'At least 4 security answers required' });
+    }
+    
+    const user = await getUserByEmail(email);
+    if(!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Save security answers as JSON
+    const securityJson = JSON.stringify(answers);
+    const userStatus = status || 'Student';
+    
+    await runSql(db, 'UPDATE users SET security = ?, status = ? WHERE email = ?', 
+      [securityJson, userStatus, email]);
+    
+    // Send notification to all admins
+    const admins = await allSql(db, 'SELECT email FROM users WHERE status = ?', ['Admin']);
+    const signupInfo = `User: ${user.name}\nEmail: ${user.email}\nStatus: ${userStatus}`;
+    for(const admin of admins){
+      await runSql(db, 'INSERT INTO notifications (title, body, to_email) VALUES (?,?,?)',
+        ['New Account Awaiting Approval', `A new account has been created and requires approval.\n\n${signupInfo}`, admin.email]);
+    }
+    
+    return res.status(200).json({ message: 'Account setup complete' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// === Account Approval (Admin) ===
+
+// GET /api/admin/pending-approvals - get all unapproved accounts
+app.get('/api/admin/pending-approvals', authenticateAccessToken, async (req,res)=>{
+  try{
+    // Check if requester is admin
+    const requester = await getUserByEmail(req.auth.email);
+    if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
+    
+    const users = await allSql(db, 'SELECT id, name, email, status, created_at FROM users WHERE approved = 0 ORDER BY created_at ASC');
+    res.json({ pending: users });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/admin/approve-user - approve a pending user
+app.post('/api/admin/approve-user', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { userEmail } = req.body;
+    if(!userEmail) return res.status(400).json({ error: 'Missing userEmail' });
+    
+    // Check if requester is admin
+    const requester = await getUserByEmail(req.auth.email);
+    if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
+    
+    const user = await getUserByEmail(userEmail);
+    if(!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Approve user
+    await runSql(db, 'UPDATE users SET approved = 1 WHERE email = ?', [userEmail]);
+    
+    // Send approval notification to user
+    await runSql(db, 'INSERT INTO notifications (title, body, to_email) VALUES (?,?,?)',
+      ['Account Approved!', 'Your account has been approved! You can now explore CPA Study Buddies.', userEmail]);
+    
+    res.json({ message: 'User approved' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/admin/reject-user - reject a pending user (delete account)
+app.post('/api/admin/reject-user', authenticateAccessToken, async (req,res)=>{
+  try{
+    const { userEmail } = req.body;
+    if(!userEmail) return res.status(400).json({ error: 'Missing userEmail' });
+    
+    // Check if requester is admin
+    const requester = await getUserByEmail(req.auth.email);
+    if(requester.status !== 'Admin') return res.status(403).json({ error: 'Unauthorized' });
+    
+    const user = await getUserByEmail(userEmail);
+    if(!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Delete user
+    await runSql(db, 'DELETE FROM users WHERE email = ?', [userEmail]);
+    
+    res.json({ message: 'User rejected and deleted' });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// === Password Recovery ===
+
+// POST /api/auth/forgot-password - check if email exists
+app.post('/api/auth/forgot-password', async (req,res)=>{
+  try{
+    const { email } = req.body;
+    if(!email) return res.status(400).json({ error: 'Email required' });
+    
+    const user = await getUserByEmail(email);
+    if(!user) return res.status(404).json({ error: 'Email not found. Please check spelling and try again.' });
+    
+    // Return a random security question from their saved answers
+    const security = JSON.parse(user.security || '{}');
+    const questions = {
+      q1: 'What was your first pet\'s name?',
+      q2: 'What was your mother\'s maiden name?',
+      q3: 'What city were you born in?',
+      q4: 'What year did you join CPA?',
+      q5: 'What is your middle name?',
+      q6: 'What is your oldest sibling\'s name?',
+      q7: 'What is your youngest sibling\'s name?',
+      q8: 'What time were you born?',
+      q9: 'When is your birthday?',
+      q10: 'What is your mother\'s father\'s name?'
+    };
+    
+    // Pick a random answered question
+    const answeredKeys = Object.keys(security).filter(k => security[k]);
+    if(answeredKeys.length === 0) return res.status(400).json({ error: 'No security questions set' });
+    
+    const randomKey = answeredKeys[Math.floor(Math.random() * answeredKeys.length)];
+    
+    // Store state temporarily (in production, use Redis or secure session storage)
+    // For now, return the key and client will remember it
+    res.json({ 
+      message: 'Question retrieved',
+      question: questions[randomKey],
+      questionKey: randomKey,
+      email: email
+    });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/auth/verify-recovery-answer - verify security answer
+app.post('/api/auth/verify-recovery-answer', async (req,res)=>{
+  try{
+    const { email, questionKey, answer } = req.body;
+    if(!email || !questionKey || !answer) return res.status(400).json({ error: 'Missing fields' });
+    
+    const user = await getUserByEmail(email);
+    if(!user) return res.status(404).json({ error: 'User not found' });
+    
+    const security = JSON.parse(user.security || '{}');
+    const storedAnswer = security[questionKey];
+    
+    // Case-insensitive comparison
+    if(!storedAnswer || storedAnswer.toLowerCase() !== answer.toLowerCase()){
+      return res.status(401).json({ error: 'Incorrect. Please try again.' });
+    }
+    
+    // Generate a temporary reset token (short-lived, use different secret)
+    const resetToken = jwt.sign({ email, resetIntent: true }, ACCESS_TOKEN_SECRET, { expiresIn: '10m' });
+    
+    res.json({ message: 'Answer verified', resetToken });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/auth/reset-password - reset password with reset token
+app.post('/api/auth/reset-password', async (req,res)=>{
+  try{
+    const { email, resetToken, newPassword, repeatPassword } = req.body;
+    if(!email || !resetToken || !newPassword || !repeatPassword) 
+      return res.status(400).json({ error: 'Missing fields' });
+    
+    if(newPassword !== repeatPassword)
+      return res.status(400).json({ error: 'Your password does not match your repeated password. Please check spelling and try again.' });
+    
+    // Verify reset token
+    jwt.verify(resetToken, ACCESS_TOKEN_SECRET, async (err, payload)=>{
+      if(err || !payload.resetIntent || payload.email !== email)
+        return res.status(401).json({ error: 'Invalid reset token' });
+      
+      try{
+        const user = await getUserByEmail(email);
+        if(!user) return res.status(404).json({ error: 'User not found' });
+        
+        const hash = await bcrypt.hash(newPassword, 10);
+        await runSql(db, 'UPDATE users SET password_hash = ? WHERE email = ?', [hash, email]);
+        
+        res.json({ message: 'Password reset successful' });
+      }catch(e){
+        console.error(e);
+        res.status(500).json({ error: 'Server error' });
+      }
+    });
+  }catch(err){ console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // === Users ===
 app.get('/api/users', authenticateAccessToken, async (req,res)=>{
   try{
