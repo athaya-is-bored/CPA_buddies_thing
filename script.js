@@ -1,4 +1,4 @@
-// script.js - updated to use backend API for Sign Up and Sign In, rest remains client-side
+// script.js - updated to use JWT authentication and wire Users + Messages to API
 (function(){
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
@@ -42,15 +42,11 @@
     })
   });
 
-  // Local storage helpers (still used for some client-only pieces)
-  function getAccounts(){ return JSON.parse(localStorage.getItem('accounts') || '[]'); }
-  function setAccounts(a){ localStorage.setItem('accounts', JSON.stringify(a)); }
-  function getNotifications(){ return JSON.parse(localStorage.getItem('notifications') || '[]'); }
-  function setNotifications(n){ localStorage.setItem('notifications', JSON.stringify(n)); }
-  function getChats(){ return JSON.parse(localStorage.getItem('chats') || '[]'); }
-  function setChats(c){ localStorage.setItem('chats', JSON.stringify(c)); }
-
-  // API helpers
+  // API helpers (include Authorization if token present)
+  function authHeaders(){
+    const token = localStorage.getItem('token');
+    return token ? { 'Authorization': 'Bearer '+token } : {};
+  }
   async function apiSignup(name,email,password){
     const res = await fetch('/api/auth/signup', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -66,28 +62,53 @@
     return res;
   }
   async function apiGetUser(email){
-    const res = await fetch(`/api/users/${encodeURIComponent(email)}`);
+    const res = await fetch(`/api/users/${encodeURIComponent(email)}`, { headers: { ...authHeaders() } });
     if(!res.ok) throw new Error('User fetch failed');
     return res.json();
   }
+  async function apiGetUsers(q){
+    const url = q ? `/api/users?q=${encodeURIComponent(q)}` : '/api/users';
+    const res = await fetch(url, { headers: { ...authHeaders() } });
+    if(!res.ok) throw new Error('Users fetch failed');
+    return res.json();
+  }
+  async function apiGetChats(email){
+    const res = await fetch(`/api/chats?email=${encodeURIComponent(email)}`, { headers: { ...authHeaders() } });
+    if(!res.ok) throw new Error('Chats fetch failed');
+    return res.json();
+  }
+  async function apiGetChatMessages(id){
+    const res = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { headers:{ ...authHeaders() } });
+    if(!res.ok) throw new Error('Messages fetch failed');
+    return res.json();
+  }
+  async function apiSendChatMessage(id, text){
+    const res = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { method:'POST', headers:{ 'Content-Type':'application/json', ...authHeaders() }, body: JSON.stringify({ text }) });
+    return res;
+  }
+  async function apiCreateChat(payload){
+    const res = await fetch('/api/chats', { method:'POST', headers:{ 'Content-Type':'application/json', ...authHeaders() }, body: JSON.stringify(payload) });
+    return res;
+  }
 
   // initial auth helpers
-  function isLoggedIn(){ return localStorage.getItem('loggedIn') === 'true'; }
+  function isLoggedIn(){ return !!localStorage.getItem('token'); }
+  function getToken(){ return localStorage.getItem('token'); }
   function getAccountEmail(){ return localStorage.getItem('accountEmail') || null; }
-  function getCurrentAccountLocal(){ const email = getAccountEmail(); if(!email) return null; return JSON.parse(localStorage.getItem('currentUser') || 'null'); }
 
   const accountNameSpan = document.getElementById('accountName');
 
-  // refreshAuth: if user email stored, fetch their user record from API to get up-to-date status/role
+  // refreshAuth: if token stored, fetch their user record from API to get up-to-date status/role
   function refreshAuth(){
-    const email = getAccountEmail();
-    if(!isLoggedIn() || !email){
+    const token = getToken();
+    if(!token){
       authGate.classList.remove('hidden');
       document.getElementById('homePage').classList.add('hidden');
       document.querySelectorAll('.admin-link, .teacher-link').forEach(el=>el.classList.add('hidden'));
       return;
     }
-    // fetch user
+    const email = localStorage.getItem('accountEmail');
+    if(!email){ authGate.classList.remove('hidden'); return; }
     apiGetUser(email).then(data=>{
       const acc = data.user;
       localStorage.setItem('currentUser', JSON.stringify(acc));
@@ -97,7 +118,9 @@
       renderSidebarLinksForRole(acc.status);
     }).catch(err => {
       console.error('Failed to fetch current user', err);
-      // fallback to showing auth gate
+      // token might be invalid
+      localStorage.removeItem('token');
+      localStorage.removeItem('accountEmail');
       authGate.classList.remove('hidden');
     });
   }
@@ -119,33 +142,32 @@
     }
   }
 
-  // Navigation dispatcher (keeps pages as before)
+  // Navigation dispatcher
   function navigateTo(page){
     document.getElementById('homePage').classList.add('hidden');
     document.getElementById('placeholderPage').classList.add('hidden');
-    document.getElementById('accountSetupPage') && document.getElementById('accountSetupPage').classList.add('hidden');
+    if(document.getElementById('usersPage')) document.getElementById('usersPage').classList.add('hidden');
+    if(document.getElementById('messagesPage')) document.getElementById('messagesPage').classList.add('hidden');
     if(page === 'home'){
       document.getElementById('homePage').classList.remove('hidden');
     } else if(page === 'users'){
-      // users rendering still client-side until we wire fully
-      renderUsersPage && renderUsersPage();
+      renderUsersPage();
     } else if(page === 'messages'){
-      renderMessagesPage && renderMessagesPage();
+      renderMessagesPage();
     } else {
       document.getElementById('placeholderPage').classList.remove('hidden');
       document.getElementById('placeholderTitle').textContent = page[0].toUpperCase()+page.slice(1);
     }
   }
 
-  // auth actions: use API for signup and signin
+  // auth actions
   document.getElementById('showSignIn').addEventListener('click', ()=>{ signInModal.classList.remove('hidden'); });
   document.getElementById('showSignUp').addEventListener('click', ()=>{ signUpModal.classList.remove('hidden'); });
   document.getElementById('signinCancel').addEventListener('click', ()=>{ signInModal.classList.add('hidden'); });
   document.getElementById('signupCancel').addEventListener('click', ()=>{ signUpModal.classList.add('hidden'); });
 
-  // Sign in: call API
+  // Sign in: call API and store JWT
   document.getElementById('signinSubmit').addEventListener('click', async ()=>{
-    const name = document.getElementById('signin-name').value.trim();
     const email = document.getElementById('signin-email').value.trim();
     const password = document.getElementById('signin-password').value.trim();
     const err = document.getElementById('signinError');
@@ -154,19 +176,20 @@
     try{
       const res = await apiLogin(email,password);
       if(!res.ok){
+        const body = await res.json().catch(()=>{});
+        err.textContent = (body && body.error) || 'One or more of your sign-in credentials are incorrect. Please check spelling and try again.';
         err.classList.remove('hidden');
         return;
       }
       const data = await res.json();
+      const token = data.token;
       const user = data.user;
-      // store minimal session info client-side
-      localStorage.setItem('loggedIn','true');
+      // store token and email
+      localStorage.setItem('token', token);
       localStorage.setItem('accountEmail', user.email);
       localStorage.setItem('accountName', user.name || '');
-      localStorage.setItem('currentUser', JSON.stringify(user));
       signInModal.classList.add('hidden');
       if(!user.approved){
-        // if not approved, show awaiting approval screen
         showAwaitingApproval();
         return;
       }
@@ -177,7 +200,7 @@
     }
   });
 
-  // Sign up: call API then go to account setup (client still handles security answers until server endpoint added)
+  // Sign up: call API then go to account setup
   document.getElementById('signupSubmit').addEventListener('click', async ()=>{
     const name = document.getElementById('signup-name').value.trim();
     const email = document.getElementById('signup-email').value.trim();
@@ -188,11 +211,9 @@
     try{
       const res = await apiSignup(name,email,password);
       if(res.status === 201){
-        // server created user; store pending setup email locally and open account setup
         localStorage.setItem('pendingSetupEmail', email);
         signUpModal.classList.add('hidden');
         authGate.classList.add('hidden');
-        // show account setup section (same client flow as before)
         if(document.getElementById('accountSetupPage')){
           document.getElementById('homePage').classList.add('hidden');
           document.getElementById('accountSetupPage').classList.remove('hidden');
@@ -200,7 +221,7 @@
           showAwaitingApproval();
         }
       } else {
-        const body = await res.json();
+        const body = await res.json().catch(()=>{});
         err.textContent = (body && body.error) || 'Sign up failed';
         err.classList.remove('hidden');
       }
@@ -210,9 +231,7 @@
     }
   });
 
-  // The rest of account setup / recovery flows still use client-side behavior until server endpoints are added
-
-  // Forgot password flow still relies on client-side account info; keep existing handlers
+  // Forgot password flow - remains client-assisted until server recovery endpoints added
   document.getElementById('forgotLink').addEventListener('click', (e)=>{
     e.preventDefault();
     signInModal.classList.add('hidden');
@@ -224,34 +243,17 @@
     const email = document.getElementById('forgotEmail').value.trim();
     const err = document.getElementById('forgotError'); err.classList.add('hidden');
     if(!email){ err.textContent = 'Please enter an email.'; err.classList.remove('hidden'); return; }
-    // For now, try to fetch user from API to verify existence
-    fetch(`/api/users/${encodeURIComponent(email)}`).then(r=>{
+    fetch(`/api/users/${encodeURIComponent(email)}`, { headers: {...authHeaders()} }).then(r=>{
       if(!r.ok) throw new Error('not found');
       return r.json();
     }).then(data=>{
-      // continue with client-side recovery using stored security (if present client-side) or inform user to contact admin
       localStorage.setItem('passwordRecoveryEmail', email);
       forgotModal.classList.add('hidden');
-      // attempt to start recovery using account data from server
-      // server currently doesn't expose security answers; full server-side recovery endpoint will be implemented later.
-      startRecoveryForAccountClientSide(email);
+      alert('Server-side recovery flow is not finished yet; please contact an admin for now.');
     }).catch(()=>{
       document.getElementById('forgotError').textContent = 'Email not found. Please check spelling and try again.'; document.getElementById('forgotError').classList.remove('hidden');
     });
   });
-
-  // Minimal client-side recovery helper (uses localStorage fallback from older client-only data)
-  function startRecoveryForAccountClientSide(email){
-    const accounts = getAccounts();
-    const acc = accounts.find(a=>a.email === email);
-    if(acc && acc.security){
-      startRecoveryForAccount(acc);
-    } else {
-      alert('Recovery requires security answers stored on this browser or server-side flow is not implemented yet. Please contact an admin.');
-    }
-  }
-
-  // The rest of the original client-side admin/users/messages code remains unchanged and will be wired to API next
 
   function showAwaitingApproval(){
     const html = `\n      <section class="page">\n        <h1>Awaiting Approval</h1>\n        <p>Thank you for signing up! To verify that you are a CPA student/teacher, a mod will check your submission manually. Once you are approved, you will receive an email and are free to explore! You can expect to be approved within a week. Thank you for your patience!</p>\n      </section>`;
@@ -262,7 +264,7 @@
   document.getElementById('logoutLink').addEventListener('click', (e)=>{
     e.preventDefault();
     if(confirm('Are you sure you would like to logout?')){
-      localStorage.removeItem('loggedIn');
+      localStorage.removeItem('token');
       localStorage.removeItem('accountEmail');
       localStorage.removeItem('accountName');
       localStorage.removeItem('currentUser');
@@ -271,44 +273,104 @@
     }
   });
 
-  // seed localstorage for legacy client-only features (does not affect server)
-  (function seedLocal(){
-    const accounts = getAccounts();
-    if(accounts.length === 0){
-      accounts.push({ name:'Local Sam', email:'sam@example.com', password:'student', approved:true, status:'Student', bio:'Local sample user', classes:['Biology A'], suspended:false, security:{}, settings:{emailPublic:false} });
-      setAccounts(accounts);
-    }
-  })();
+  // Users page wiring
+  async function renderUsersPage(){
+    try{
+      const container = document.getElementById('appContent');
+      container.innerHTML = '<section class="page"><h1>Users</h1><input id="userSearch" placeholder="Search users" style="width:100%;padding:8px;margin-bottom:12px;" /><div id="usersList"></div></section>';
+      document.getElementById('userSearch').addEventListener('input', async (e)=>{
+        await loadUsers(e.target.value);
+      });
+      await loadUsers();
+    }catch(err){ console.error(err); }
+  }
+  async function loadUsers(q=''){
+    try{
+      const res = await apiGetUsers(q);
+      const users = res.users || [];
+      const list = document.getElementById('usersList');
+      list.innerHTML = '';
+      users.forEach(u=>{
+        const row = document.createElement('div');
+        row.style.display='flex'; row.style.alignItems='center'; row.style.padding='8px 0'; row.style.borderBottom='1px solid #e1e1e1';
+        const pfp = document.createElement('div'); pfp.style.width='40px'; pfp.style.height='40px'; pfp.style.borderRadius='50%'; pfp.style.background='#ddd'; pfp.style.marginRight='12px';
+        const name = document.createElement('a'); name.href='#'; name.textContent = u.name; name.style.color='#333333'; name.style.textDecoration='none';
+        name.addEventListener('mouseover', ()=>{ name.style.opacity = '0.9' }); name.addEventListener('mouseout', ()=>{ name.style.opacity = '1' });
+        name.addEventListener('click', (ev)=>{ ev.preventDefault(); openProfile(u.email); });
+        const tag = document.createElement('div'); tag.textContent = u.status; tag.style.marginLeft='auto'; tag.style.background='#bee6ef'; tag.style.padding='4px 8px'; tag.style.borderRadius='8px'; tag.style.fontSize='12px';
+        row.appendChild(pfp); row.appendChild(name); row.appendChild(tag);
+        list.appendChild(row);
+      });
+    }catch(err){ console.error(err); }
+  }
+
+  function openProfile(email){
+    // fetch user and render a simple profile view
+    apiGetUser(email).then(data=>{
+      const u = data.user;
+      const container = document.getElementById('appContent');
+      const html = `\n        <section class="page">\n          <div style=\"display:flex;align-items:center;justify-content:space-between;\">\n            <div style=\"display:flex;align-items:center\">\n              <div style=\"width:80px;height:80px;border-radius:50%;background:#e1e1e1;margin-right:16px\"></div>\n              <div>\n                <h2>${u.name}</h2>\n                <div style=\"color:#666\">${u.status}</div>\n              </div>\n            </div>\n            <div>\n              ${ u.email ? `<div style=\"color:#333\">${u.email}</div>` : '' }\n            </div>\n          </div>\n          <div style=\"margin-top:16px;padding:12px;border-radius:8px;background:#fff;\">\n            <div>${u.bio || ''}</div>\n            <div style=\"margin-top:12px\"><strong>Classes</strong><div>${(u.classes||[]).join(', ')}</div></div>\n          </div>\n        </section>`;
+      container.innerHTML = html;
+    }).catch(err=>{ console.error(err); alert('Failed to load profile'); });
+  }
+
+  // Messages page wiring (basic)
+  async function renderMessagesPage(){
+    const container = document.getElementById('appContent');
+    container.innerHTML = `\n      <section class=\"page\">\n        <h1>Messages</h1>\n        <div style=\"display:flex;gap:12px;\">\n          <div id=\"chatsList\" style=\"width:28%;background:#bee6ef;padding:12px;border-radius:8px;\">Loading...</div>\n          <div id=\"chatWindow\" style=\"flex:1;min-height:300px;padding:12px;background:#fff;border-radius:8px;\">Select a chat</div>\n        </div>\n      </section>`;
+    const email = localStorage.getItem('accountEmail');
+    if(!email){ container.querySelector('#chatsList').textContent='Sign in first'; return; }
+    try{
+      const res = await apiGetChats(email);
+      const chats = res.chats || [];
+      const list = document.getElementById('chatsList'); list.innerHTML='';
+      chats.forEach(c=>{
+        const row = document.createElement('div'); row.style.padding='8px'; row.style.borderBottom='1px solid rgba(0,0,0,0.06)'; row.style.cursor='pointer';
+        row.textContent = c.name || c.participants.filter(p=>p!==email).join(', ');
+        row.addEventListener('click', ()=>{ openChat(c.id, c.name||''); });
+        list.appendChild(row);
+      });
+      const createBtn = document.createElement('button'); createBtn.textContent='Create New'; createBtn.style.marginTop='12px';
+      createBtn.addEventListener('click', ()=>{ openCreateChat(); });
+      list.appendChild(createBtn);
+    }catch(err){ console.error(err); document.getElementById('chatsList').textContent='Failed to load chats'; }
+  }
+
+  async function openChat(id,name){
+    const container = document.getElementById('chatWindow'); container.innerHTML = '<div>Loading...</div>';
+    try{
+      const res = await apiGetChatMessages(id);
+      const msgs = res.messages || [];
+      const html = ['<div style="display:flex;flex-direction:column;gap:8px;">'];
+      msgs.forEach(m=>{
+        const isMe = (m.sender === localStorage.getItem('accountEmail'));
+        html.push(`<div style="align-self:${isMe ? 'flex-start' : 'flex-end'};background:#bee6ef;padding:8px;border-radius:8px;max-width:70%">${isMe ? 'You' : m.sender}<div style="font-size:12px;color:#333">${m.text}</div><div style="font-size:10px;color:#666">${m.created_at}</div></div>`);
+      });
+      html.push(`</div>`);
+      html.push(`<div style="margin-top:12px;display:flex;gap:8px;"><input id="msgInput" style="flex:1;padding:8px" /><button id="sendMsgBtn">Send</button></div>`);
+      container.innerHTML = html.join('\n');
+      document.getElementById('sendMsgBtn').addEventListener('click', async ()=>{
+        const v = document.getElementById('msgInput').value.trim(); if(!v) return;
+        await apiSendChatMessage(id, v);
+        openChat(id,name);
+      });
+    }catch(err){ console.error(err); container.textContent='Failed to load messages'; }
+  }
+
+  async function openCreateChat(){
+    const email = localStorage.getItem('accountEmail');
+    const participant = prompt('Enter the email of the person to message (for demo)');
+    if(!participant) return;
+    const id = `dm-${[email,participant].sort().join('-')}`;
+    await apiCreateChat({ id, type:'dm', participants:[email, participant] });
+    renderMessagesPage();
+  }
 
   // initial navigation binding for top icons
   document.getElementById('homeIcon').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('home'); });
   document.getElementById('gearIcon').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('settings'); });
   document.getElementById('profilePicWrap').addEventListener('click', (e)=>{ e.preventDefault(); navigateTo('profile'); });
 
-  // on load, ensure sidebar visibility is updated
   document.addEventListener('DOMContentLoaded', refreshAuth);
-
-  // small helpers copied from previous implementation used by recovery flow
-  function startRecoveryForAccount(acc){
-    const security = acc.security || {};
-    const keys = Object.keys(security).filter(k=>security[k] && security[k].trim().length>0);
-    if(keys.length === 0){
-      alert('No security questions set for this account. Please contact support.');
-      return;
-    }
-    const picked = keys[Math.floor(Math.random()*keys.length)];
-    localStorage.setItem('recoveryQuestionKey', picked);
-    renderRecoveryQuestion(picked, security[picked]);
-  }
-  function renderRecoveryQuestion(key, expected){
-    document.getElementById('recoveryQuestion').textContent = questionKeyToText(key);
-    document.getElementById('recoveryAnswer').value = '';
-    document.getElementById('recoveryError').classList.add('hidden');
-    recoveryModal.classList.remove('hidden');
-  }
-  function questionKeyToText(k){
-    const map = { q1: "What was your first pet's name?", q2: "What was your mother's maiden name?", q3: "What city were you born in?", q4: "What year did you join CPA?", q5: "What is your middle name?", q6: "What is your oldest sibling's name?", q7: "What is your youngest sibling's name?", q8: "What time were you born?", q9: "When is your birthday?", q10: "What is your mother’s father’s name?" };
-    return map[k] || k;
-  }
 
 })();
