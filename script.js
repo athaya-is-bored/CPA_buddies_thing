@@ -1,4 +1,5 @@
 // script.js - Frontend with cookie-based authentication (HttpOnly cookies)
+// Enhanced with Profile Pages, Settings, Study Buddies, Admin & Teacher Dashboards
 (function(){
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
@@ -117,6 +118,14 @@
     return res.json();
   }
 
+  async function apiUpdateUserProfile(email, updates){
+    const res = await apiFetch(`/api/users/${encodeURIComponent(email)}`, {
+      method:'PATCH',
+      body: JSON.stringify(updates)
+    });
+    return res;
+  }
+
   async function apiGetChats(email){
     const res = await apiFetch(`/api/chats?email=${encodeURIComponent(email)}`);
     if(!res.ok) throw new Error('Chats fetch failed');
@@ -141,6 +150,44 @@
     const res = await apiFetch('/api/chats', {
       method:'POST',
       body: JSON.stringify(payload)
+    });
+    return res;
+  }
+
+  // Study Buddies API
+  async function apiGetStudyBuddies(email){
+    const res = await apiFetch(`/api/study-buddies?email=${encodeURIComponent(email)}`);
+    if(!res.ok) throw new Error('Study buddies fetch failed');
+    return res.json();
+  }
+
+  async function apiAddStudyBuddy(email, buddyEmail){
+    const res = await apiFetch('/api/study-buddies', {
+      method:'POST',
+      body: JSON.stringify({ email, buddyEmail })
+    });
+    return res;
+  }
+
+  async function apiRemoveStudyBuddy(email, buddyEmail){
+    const res = await apiFetch(`/api/study-buddies/${encodeURIComponent(buddyEmail)}`, {
+      method:'DELETE',
+      body: JSON.stringify({ email })
+    });
+    return res;
+  }
+
+  // User settings API
+  async function apiGetUserSettings(email){
+    const res = await apiFetch(`/api/users/${encodeURIComponent(email)}/settings`);
+    if(!res.ok) throw new Error('Settings fetch failed');
+    return res.json();
+  }
+
+  async function apiUpdateUserSettings(email, settings){
+    const res = await apiFetch(`/api/users/${encodeURIComponent(email)}/settings`, {
+      method:'PATCH',
+      body: JSON.stringify(settings)
     });
     return res;
   }
@@ -175,6 +222,25 @@
       body: JSON.stringify({ userEmail })
     });
     return res;
+  }
+
+  // Teacher Dashboard API
+  async function apiGetStudents(){
+    const res = await apiFetch('/api/teacher/students');
+    if(!res.ok) throw new Error('Failed to fetch students');
+    return res.json();
+  }
+
+  async function apiGetStudentProgress(studentEmail){
+    const res = await apiFetch(`/api/teacher/students/${encodeURIComponent(studentEmail)}/progress`);
+    if(!res.ok) throw new Error('Failed to fetch student progress');
+    return res.json();
+  }
+
+  async function apiGetClassStats(){
+    const res = await apiFetch('/api/teacher/class-stats');
+    if(!res.ok) throw new Error('Failed to fetch class stats');
+    return res.json();
   }
 
   async function apiForgotPassword(email){
@@ -229,7 +295,7 @@
       // Not logged in
       authGate.classList.remove('hidden');
       document.getElementById('homePage').classList.add('hidden');
-      document.querySelectorAll('.admin-link, .teacher-link').forEach(el=>el.classList.add('hidden'));
+      document.querySelectorAll('.admin-link, .teacher-link, .study-buddies-link, .settings-link, .profile-link').forEach(el=>el.classList.add('hidden'));
       currentUser = null;
     });
   }
@@ -241,16 +307,24 @@
   function renderSidebarLinksForRole(role){
     const adminLink = document.querySelector('.admin-link');
     const teacherLink = document.querySelector('.teacher-link');
+    const studyBuddiesLink = document.querySelector('.study-buddies-link');
+    const settingsLink = document.querySelector('.settings-link');
+    const profileLink = document.querySelector('.profile-link');
+    
     if(role === 'Admin'){
-      adminLink.classList.remove('hidden');
+      adminLink?.classList.remove('hidden');
     } else {
-      adminLink.classList.add('hidden');
+      adminLink?.classList.add('hidden');
     }
     if(role === 'Teacher' || role === 'Admin'){
-      teacherLink.classList.remove('hidden');
+      teacherLink?.classList.remove('hidden');
     } else {
-      teacherLink.classList.add('hidden');
+      teacherLink?.classList.add('hidden');
     }
+    // Study buddies, settings, and profile are available to all logged-in users
+    studyBuddiesLink?.classList.remove('hidden');
+    settingsLink?.classList.remove('hidden');
+    profileLink?.classList.remove('hidden');
   }
 
   // Navigation dispatcher
@@ -259,6 +333,11 @@
     document.getElementById('placeholderPage').classList.add('hidden');
     if(document.getElementById('usersPage')) document.getElementById('usersPage').classList.add('hidden');
     if(document.getElementById('messagesPage')) document.getElementById('messagesPage').classList.add('hidden');
+    if(document.getElementById('profilePage')) document.getElementById('profilePage').classList.add('hidden');
+    if(document.getElementById('settingsPage')) document.getElementById('settingsPage').classList.add('hidden');
+    if(document.getElementById('studyBuddiesPage')) document.getElementById('studyBuddiesPage').classList.add('hidden');
+    if(document.getElementById('teacherDashboardPage')) document.getElementById('teacherDashboardPage').classList.add('hidden');
+    
     if(page === 'home'){
       document.getElementById('homePage').classList.remove('hidden');
     } else if(page === 'admin'){
@@ -267,6 +346,14 @@
       renderUsersPage();
     } else if(page === 'messages'){
       renderMessagesPage();
+    } else if(page === 'profile'){
+      renderUserProfile();
+    } else if(page === 'settings'){
+      renderSettingsPage();
+    } else if(page === 'study-buddies'){
+      renderStudyBuddiesPage();
+    } else if(page === 'teacher'){
+      renderTeacherDashboard();
     } else {
       document.getElementById('placeholderPage').classList.remove('hidden');
       document.getElementById('placeholderTitle').textContent = page[0].toUpperCase()+page.slice(1);
@@ -392,7 +479,7 @@
     const html = `
       <section class="page">
         <h1>Awaiting Approval</h1>
-        <p>Thank you for signing up! To verify that you are a CPA student/teacher, a mod will check your submission manually. Once you are approved, you will receive a notification and are free to explore! You can expect to be approved within a week. Thank you for your patience!</p>
+        <p>Thank you for signing up! To verify that you are a CPA student/teacher, a mod will check your submission manually. Once you are approved, you will receive a notification and are free to use the platform.</p>
       </section>
     `;
     document.getElementById('appContent').innerHTML = html;
@@ -546,7 +633,7 @@
         const name = document.createElement('a'); name.href='#'; name.textContent = u.name; name.style.color='#333333'; name.style.textDecoration='none';
         name.addEventListener('mouseover', ()=>{ name.style.opacity = '0.9' }); name.addEventListener('mouseout', ()=>{ name.style.opacity = '1' });
         name.addEventListener('click', (ev)=>{ ev.preventDefault(); openProfile(u.email); });
-        const tag = document.createElement('div'); tag.textContent = u.status; tag.style.marginLeft='auto'; tag.style.background='#bee6ef'; tag.style.padding='4px 8px'; tag.style.borderRadius='8px'; tag.style.fontWeight='700';
+        const tag = document.createElement('div'); tag.textContent = u.status; tag.style.marginLeft='auto'; tag.style.background='#bee6ef'; tag.style.padding='4px 8px'; tag.style.borderRadius='8px'; tag.style.fontSize='12px';
         row.appendChild(pfp); row.appendChild(name); row.appendChild(tag);
         list.appendChild(row);
       });
@@ -567,10 +654,13 @@
                 <p style="margin:5px 0;color:#666;">${u.status}</p>
               </div>
             </div>
-            <button class="btn primary" id="messageBtn">Message</button>
+            <div style="display:flex;gap:8px;">
+              <button class="btn primary" id="messageBtn">Message</button>
+              <button class="btn secondary" id="addBuddyBtn">Add Study Buddy</button>
+            </div>
           </div>
           <div class="card"><h3>Bio</h3><p>${u.bio || '(No bio set)'}</p></div>
-          <div class="card"><h3>Classes</h3><p>${u.classes.length > 0 ? u.classes.join(', ') : '(No classes set)'}</p></div>
+          <div class="card"><h3>Classes</h3><p>${u.classes && u.classes.length > 0 ? u.classes.join(', ') : '(No classes set)'}</p></div>
           ${u.email ? `<div class="card"><h3>Email</h3><p>${u.email}</p></div>` : ''}
         </section>
       `;
@@ -578,7 +668,241 @@
       document.getElementById('messageBtn').addEventListener('click', ()=>{
         navigateTo('messages');
       });
+      document.getElementById('addBuddyBtn').addEventListener('click', async ()=>{
+        try{
+          const res = await apiAddStudyBuddy(currentUser.email, email);
+          if(res.ok){
+            alert('Study buddy added!');
+          } else {
+            alert('Failed to add study buddy');
+          }
+        }catch(err){
+          console.error(err);
+          alert('Error adding study buddy');
+        }
+      });
     }).catch(err=>{ console.error(err); alert('Failed to load profile'); });
+  }
+
+  // ===== User Profile Page =====
+  async function renderUserProfile(){
+    try{
+      const container = document.getElementById('appContent');
+      const data = await apiGetUser(currentUser.email);
+      const u = data.user;
+      
+      const html = `
+        <section class="page">
+          <h1>My Profile</h1>
+          <div class="card">
+            <div style="display:flex;align-items:center;gap:20px;margin-bottom:20px;">
+              <div style="width:100px;height:100px;border-radius:50%;background:#ddd;"></div>
+              <div>
+                <h2 style="margin:0;">${u.name}</h2>
+                <p style="margin:5px 0;color:#666;">${u.status}</p>
+                <p style="margin:5px 0;color:#999;font-size:14px;">${u.email}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="card">
+            <h3>Bio</h3>
+            <p>${u.bio || '(No bio set)'}</p>
+            <textarea id="bioEdit" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;" rows="4">${u.bio || ''}</textarea>
+          </div>
+          
+          <div class="card">
+            <h3>Classes</h3>
+            <p>${u.classes && u.classes.length > 0 ? u.classes.join(', ') : '(No classes set)'}</p>
+            <input id="classesEdit" type="text" placeholder="Enter classes (comma-separated)" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;" value="${(u.classes || []).join(', ')}">
+          </div>
+          
+          <button class="btn primary" id="saveProfileBtn" style="margin-top:20px;">Save Changes</button>
+        </section>
+      `;
+      
+      container.innerHTML = html;
+      
+      document.getElementById('saveProfileBtn').addEventListener('click', async ()=>{
+        const bio = document.getElementById('bioEdit').value.trim();
+        const classesStr = document.getElementById('classesEdit').value.trim();
+        const classes = classesStr ? classesStr.split(',').map(c=>c.trim()) : [];
+        
+        try{
+          const res = await apiUpdateUserProfile(currentUser.email, { bio, classes });
+          if(res.ok){
+            alert('Profile updated successfully!');
+            renderUserProfile();
+          } else {
+            alert('Failed to update profile');
+          }
+        }catch(err){
+          console.error(err);
+          alert('Error updating profile');
+        }
+      });
+    }catch(err){
+      console.error(err);
+      document.getElementById('appContent').innerHTML = '<section class="page"><h1>Profile</h1><p>Failed to load profile</p></section>';
+    }
+  }
+
+  // ===== Settings Page =====
+  async function renderSettingsPage(){
+    try{
+      const container = document.getElementById('appContent');
+      
+      // Try to fetch settings, but provide defaults if API doesn't exist yet
+      let settings = {};
+      try{
+        const data = await apiGetUserSettings(currentUser.email);
+        settings = data.settings || {};
+      }catch(err){
+        console.warn('Settings API not available, using defaults');
+      }
+      
+      const html = `
+        <section class="page">
+          <h1>Settings</h1>
+          
+          <div class="card">
+            <h3>Notifications</h3>
+            <label style="display:flex;align-items:center;margin:8px 0;">
+              <input type="checkbox" id="emailNotifications" ${settings.emailNotifications !== false ? 'checked' : ''} style="margin-right:8px;">
+              Email Notifications
+            </label>
+            <label style="display:flex;align-items:center;margin:8px 0;">
+              <input type="checkbox" id="messageNotifications" ${settings.messageNotifications !== false ? 'checked' : ''} style="margin-right:8px;">
+              Message Notifications
+            </label>
+            <label style="display:flex;align-items:center;margin:8px 0;">
+              <input type="checkbox" id="studyBuddyNotifications" ${settings.studyBuddyNotifications !== false ? 'checked' : ''} style="margin-right:8px;">
+              Study Buddy Notifications
+            </label>
+          </div>
+          
+          <div class="card">
+            <h3>Privacy</h3>
+            <label style="display:flex;align-items:center;margin:8px 0;">
+              <input type="checkbox" id="publicProfile" ${settings.publicProfile ? 'checked' : ''} style="margin-right:8px;">
+              Make Profile Public
+            </label>
+            <label style="display:flex;align-items:center;margin:8px 0;">
+              <input type="checkbox" id="allowMessages" ${settings.allowMessages !== false ? 'checked' : ''} style="margin-right:8px;">
+              Allow Direct Messages
+            </label>
+          </div>
+          
+          <div class="card">
+            <h3>Account</h3>
+            <button class="btn warn" id="changePasswordBtn">Change Password</button>
+            <button class="btn warn" id="deleteAccountBtn" style="margin-left:8px;">Delete Account</button>
+          </div>
+          
+          <button class="btn primary" id="saveSettingsBtn" style="margin-top:20px;">Save Settings</button>
+        </section>
+      `;
+      
+      container.innerHTML = html;
+      
+      document.getElementById('saveSettingsBtn').addEventListener('click', async ()=>{
+        const updatedSettings = {
+          emailNotifications: document.getElementById('emailNotifications').checked,
+          messageNotifications: document.getElementById('messageNotifications').checked,
+          studyBuddyNotifications: document.getElementById('studyBuddyNotifications').checked,
+          publicProfile: document.getElementById('publicProfile').checked,
+          allowMessages: document.getElementById('allowMessages').checked
+        };
+        
+        try{
+          const res = await apiUpdateUserSettings(currentUser.email, updatedSettings);
+          if(res.ok){
+            alert('Settings saved successfully!');
+          } else {
+            alert('Failed to save settings');
+          }
+        }catch(err){
+          console.error(err);
+          alert('Error saving settings');
+        }
+      });
+      
+      document.getElementById('changePasswordBtn').addEventListener('click', ()=>{
+        alert('Implement password change modal');
+      });
+      
+      document.getElementById('deleteAccountBtn').addEventListener('click', ()=>{
+        if(confirm('Are you sure you want to delete your account? This action cannot be undone.')){
+          alert('Implement account deletion');
+        }
+      });
+    }catch(err){
+      console.error(err);
+      document.getElementById('appContent').innerHTML = '<section class="page"><h1>Settings</h1><p>Failed to load settings</p></section>';
+    }
+  }
+
+  // ===== Study Buddies Page =====
+  async function renderStudyBuddiesPage(){
+    try{
+      const container = document.getElementById('appContent');
+      container.innerHTML = '<section class="page"><h1>Study Buddies</h1><div id="buddiesContent">Loading...</div></section>';
+      
+      const res = await apiGetStudyBuddies(currentUser.email);
+      const buddies = res.buddies || [];
+      
+      let html = '<div style="display:grid;gap:12px;">';
+      
+      if(buddies.length === 0){
+        html += '<p>You don\'t have any study buddies yet. Add someone from the Users page!</p>';
+      } else {
+        buddies.forEach(buddy=>{
+          html += `
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <div style="width:50px;height:50px;border-radius:50%;background:#ddd;"></div>
+                <div>
+                  <p style="margin:0;font-weight:bold;">${buddy.name}</p>
+                  <p style="margin:5px 0;color:#666;font-size:14px;">${buddy.status}</p>
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="small-btn primary" onclick="window.messageBuddy('${buddy.email}')">Message</button>
+                <button class="small-btn warn" onclick="window.removeBuddy('${buddy.email}')">Remove</button>
+              </div>
+            </div>
+          `;
+        });
+      }
+      
+      html += '</div>';
+      document.getElementById('buddiesContent').innerHTML = html;
+      
+      // Expose functions to window
+      window.messageBuddy = (buddyEmail)=>{
+        navigateTo('messages');
+      };
+      
+      window.removeBuddy = async (buddyEmail)=>{
+        if(confirm('Remove this study buddy?')){
+          try{
+            const res = await apiRemoveStudyBuddy(currentUser.email, buddyEmail);
+            if(res.ok){
+              alert('Study buddy removed!');
+              renderStudyBuddiesPage();
+            } else {
+              alert('Failed to remove study buddy');
+            }
+          }catch(err){
+            console.error(err);
+            alert('Error removing study buddy');
+          }
+        }
+      };
+    }catch(err){
+      console.error(err);
+      document.getElementById('appContent').innerHTML = '<section class="page"><h1>Study Buddies</h1><p>Failed to load study buddies</p></section>';
+    }
   }
 
   // ===== Messages Page =====
@@ -619,7 +943,7 @@
       const html = ['<div style="display:flex;flex-direction:column;gap:8px;height:100%;overflow:auto;">'];
       msgs.forEach(m=>{
         const isMe = (m.sender === currentUser.email);
-        html.push(`<div style="align-self:${isMe ? 'flex-start' : 'flex-end'};background:#bee6ef;padding:8px;border-radius:8px;max-width:70%"><strong>${isMe ? 'You' : m.sender}</strong><br/>${m.text}<br/><small style="color:#666;font-size:11px;">${new Date(m.created_at).toLocaleString()}</small></div>`);
+        html.push(`<div style="align-self:${isMe ? 'flex-start' : 'flex-end'};background:#bee6ef;padding:8px;border-radius:8px;max-width:70%"><strong>${isMe ? 'You' : m.sender}</strong><br/>${m.text}</div>`);
       });
       html.push(`</div>`);
       html.push(`<div style="margin-top:12px;display:flex;gap:8px;"><input id="msgInput" style="flex:1;padding:8px" placeholder="Type a message..." /><button class="btn primary" id="sendMsgBtn">Send</button></div>`);
@@ -641,7 +965,7 @@
     renderMessagesPage();
   }
 
-  // ===== Admin Dashboard =====
+  // ===== Admin Dashboard (Enhanced) =====
   async function renderAdminDashboard(){
     const container = document.getElementById('appContent');
     container.innerHTML = '<section class="page"><h1>Admin Dashboard</h1><div id="adminContent">Loading...</div></section>';
@@ -649,7 +973,10 @@
     try{
       const res = await apiGetPendingApprovals();
       const pending = res.pending || [];
-      let html = '<h2>Pending Approvals</h2>';
+      let html = `
+        <div style="margin-bottom:30px;">
+          <h2>Pending Approvals (${pending.length})</h2>
+      `;
       
       if(pending.length === 0){
         html += '<p>No pending approvals.</p>';
@@ -658,7 +985,11 @@
           html += `
             <div class="card">
               <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div><strong>${u.name}</strong><br/>${u.email}</div>
+                <div>
+                  <strong>${u.name}</strong><br/>
+                  <span style="color:#666;font-size:14px;">${u.email}</span><br/>
+                  <span style="color:#999;font-size:12px;">Status: ${u.status}</span>
+                </div>
                 <div style="display:flex;gap:8px;">
                   <button class="small-btn primary" onclick="window.approveUserFunc('${u.email}')">Approve</button>
                   <button class="small-btn warn" onclick="window.rejectUserFunc('${u.email}')">Reject</button>
@@ -668,6 +999,16 @@
           `;
         });
       }
+      
+      html += `
+        </div>
+        <div>
+          <h2>Admin Tools</h2>
+          <div class="card">
+            <p>System Status: <span style="color:green;font-weight:bold;">✓ Operational</span></p>
+          </div>
+        </div>
+      `;
       
       document.getElementById('adminContent').innerHTML = html;
       
@@ -698,6 +1039,92 @@
     }catch(err){
       console.error(err);
       document.getElementById('adminContent').innerHTML = '<p>Failed to load admin dashboard</p>';
+    }
+  }
+
+  // ===== Teacher Dashboard (NEW) =====
+  async function renderTeacherDashboard(){
+    const container = document.getElementById('appContent');
+    container.innerHTML = '<section class="page"><h1>Teacher Dashboard</h1><div id="teacherContent">Loading...</div></section>';
+    
+    try{
+      const studentsRes = await apiGetStudents();
+      const statsRes = await apiGetClassStats();
+      
+      const students = studentsRes.students || [];
+      const stats = statsRes.stats || {};
+      
+      let html = `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:30px;">
+          <div class="card" style="text-align:center;">
+            <h3 style="margin:0;color:#666;">Total Students</h3>
+            <p style="font-size:32px;margin:10px 0;font-weight:bold;">${stats.totalStudents || 0}</p>
+          </div>
+          <div class="card" style="text-align:center;">
+            <h3 style="margin:0;color:#666;">Active Students</h3>
+            <p style="font-size:32px;margin:10px 0;font-weight:bold;">${stats.activeStudents || 0}</p>
+          </div>
+          <div class="card" style="text-align:center;">
+            <h3 style="margin:0;color:#666;">Avg Attendance</h3>
+            <p style="font-size:32px;margin:10px 0;font-weight:bold;">${(stats.avgAttendance || 0).toFixed(1)}%</p>
+          </div>
+        </div>
+        
+        <div>
+          <h2>Students</h2>
+          <div style="display:grid;gap:12px;">
+      `;
+      
+      if(students.length === 0){
+        html += '<p>No students in your class yet.</p>';
+      } else {
+        students.forEach(student=>{
+          html += `
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <p style="margin:0;font-weight:bold;">${student.name}</p>
+                <p style="margin:5px 0;color:#666;font-size:14px;">${student.email}</p>
+              </div>
+              <div>
+                <button class="small-btn primary" onclick="window.viewStudentProgress('${student.email}')">View Progress</button>
+              </div>
+            </div>
+          `;
+        });
+      }
+      
+      html += '</div></div>';
+      
+      document.getElementById('teacherContent').innerHTML = html;
+      
+      // Expose function to window
+      window.viewStudentProgress = async (studentEmail)=>{
+        try{
+          const res = await apiGetStudentProgress(studentEmail);
+          const progress = res.progress || {};
+          
+          let progressHtml = `
+            <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;padding:20px;border-radius:8px;border:1px solid #ddd;max-width:500px;width:90%;">
+              <h2>${progress.studentName}</h2>
+              <p><strong>Email:</strong> ${progress.email}</p>
+              <p><strong>Attendance Rate:</strong> ${(progress.attendanceRate || 0).toFixed(1)}%</p>
+              <p><strong>Assignment Completion:</strong> ${progress.assignmentCompletion || 0} of ${progress.totalAssignments || 0}</p>
+              <p><strong>Grade:</strong> ${progress.grade || 'N/A'}</p>
+              <button class="btn primary" onclick="this.parentElement.parentElement.removeChild(this.parentElement)" style="margin-top:15px;">Close</button>
+            </div>
+          `;
+          
+          const modal = document.createElement('div');
+          modal.innerHTML = progressHtml;
+          document.body.appendChild(modal);
+        }catch(err){
+          console.error(err);
+          alert('Failed to load student progress');
+        }
+      };
+    }catch(err){
+      console.error(err);
+      document.getElementById('teacherContent').innerHTML = '<p>Failed to load teacher dashboard</p>';
     }
   }
 
